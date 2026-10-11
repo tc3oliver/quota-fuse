@@ -74,7 +74,7 @@ QUOTAFUSE_PROXY_TOKEN="$(node --env-file=.env.proxy -p 'process.env.QG_PROXY_TOK
   opencode run --standalone -m quotafuse/YOUR_VERIFIED_MODEL_ID "Read the public fixture file"
 ```
 
-The `models` key and `-m` model name must use an exact model ID from the automatically populated Data Sharing catalog in `config.json` (or the user's narrower allowlist). The user does not need to copy every eligible model ID into OpenCode; select just the model they want to run. The chosen model must also be available to their API project and support this adapter's request format. Do not set the `public` header
+The `models` key and `-m` name select one concrete API model ID for OpenCode. QuotaFuse defaults to no model whitelist, so `/v1/models` cannot enumerate a provider catalog. The user must confirm the selected model actually qualifies for complimentary tokens and supports the requested API; unrestricted model IDs **can incur real charges**. A user-created optional whitelist can restrict IDs. Do not set the `public` header
 in an existing private work repository. Never put real API credentials in the
 OpenCode config; `QUOTAFUSE_PROXY_TOKEN` is only the local proxy token.
 

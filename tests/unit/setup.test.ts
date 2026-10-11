@@ -25,10 +25,8 @@ test('setup creates separate credentials, config and private file permissions wi
     assert.match(collector, /OPENAI_ADMIN_KEY=/);
     assert.doesNotMatch(collector, /OPENAI_API_KEY=|QG_PROXY_TOKEN=/);
     assert.equal(cfg.policy.preflightCostVerified, false);
-    assert.ok(cfg.quotas.premium.models.length > 0, 'new installs include the reviewed eligible premium catalog');
-    assert.ok(cfg.quotas.economy.models.length > 0, 'new installs include the reviewed eligible economy catalog');
-    assert.ok(cfg.quotas.premium.models.includes('gpt-6.1-sol'));
-    assert.ok(cfg.quotas.economy.models.includes('gpt-5.6-terra'));
+    assert.deepEqual(cfg.quotas.premium.models, []);
+    assert.deepEqual(cfg.quotas.economy.models, []);
     if (process.platform !== 'win32') {
       for (const name of ['config.json','.env.proxy','.env.collector'])
         assert.equal(statSync(join(dir,name)).mode & 0o777, 0o600);

@@ -1,65 +1,82 @@
-# Data Sharing project and tier configuration
+# OpenAI Data Sharing: Project and quotas
 
-QuotaFuse protects **one explicitly selected API routing project per SQLite ledger**. An OpenAI organization may have Data Sharing enabled for **All projects**; the user does not need a specially enrolled project. OpenAI's complimentary token limits are **organization-wide for each model group**, never per project or per model.
+QuotaFuse is a local proxy with a **single selected API routing Project** per
+SQLite ledger. The OpenAI Data Sharing setting can be **All projects** or
+**Selected projects**; this is separate from QuotaFuse's routing setting.
 
-Official terms: https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai
-
-| Org tier | Premium/day | Economy/day | At 85% safety |
-| --- | ---: | ---: | --- |
-| build | 250,000 | 2,500,000 | 212,500 / 2,125,000 |
-| launch | 1,000,000 | 10,000,000 | 850,000 / 8,500,000 |
-| grow | 1,000,000 | 10,000,000 | 850,000 / 8,500,000 |
-
-The words premium/economy are **QuotaFuse model groups**, not the OpenAI usage `service_tier`, organization enrollment tier, or subscription plan.
-
-## Required configuration (no model-by-model questionnaire)
-
-Run `npm run onboard` on a fresh checkout. The shipped template
-prepopulates `quotas.*.models` with **all exact model IDs listed under the
-official Data Sharing incentive offer** as of 2026-10-11, excluding
-`gpt-4.5-preview-2025-02-27` (explicitly shut down). This is a
-**reviewed snapshot** in `config.example.json`, not a wildcard or
-proof that every model remains available. Reconcile the official offer when
-new models are published; don't enable arbitrary names as a shortcut.
-
-Default is **all documented eligible models**. Restrict only if the user wants
-a custom whitelist:
-
-```bash
-npm run onboard -- --only=gpt-6-sol,gpt-5.6-terra
-# Undo restriction in a fresh, unused setup:
-npm run onboard -- --only=all
-```
-
-For **All projects** Data Sharing, choose an existing Project for QuotaFuse's
-API routing rather than asking for a "Data Sharing-only Project":
-
-```bash
-npm run onboard -- --project=proj_YOUR_EXISTING_ID --tier=launch
-```
-
-The `build` default is deliberately conservative (250K/2.5M); confirmed
-Launch/Grow offers allow 1M/10M. Daily limits are **organization-wide per
-model group**. Leave the `FREE_ONLY` policy, 85% safety cap and billing
-attestations fail-closed until independently confirmed.
-
-**Operational limitation:** Admin Usage is queried across all organization
-projects; currently QuotaFuse pauses if an official usage row belongs to a
-different project or an unreviewed model. "All projects" in OpenAI settings
-does **not** make QuotaFuse a cross-project router. Unmanaged bypass traffic
-may spend the same org quota. Do not create separate ledgers for one org pool.
-
-Project-scoped `OPENAI_API_KEY` belongs only in `.env.proxy`; the distinct
-organization `OPENAI_ADMIN_KEY` belongs only in `.env.collector`.
-Never paste either key into an agent conversation.
-
-Official model groups and program terms:
+Official terms, free token groups, eligibility and conditions:
 https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai
 
-## Migration
+| OpenAI enrollment | What to configure |
+| --- | --- |
+| All projects | Choose **any existing** API Project ID (`proj_...`); no dedicated Data Sharing Project needed |
+| Selected projects | Choose **one of the already opted-in** Projects. A non-enrolled Project is not assumed free |
+| Unknown or not verified | Finish the offline installation; keep live inference PAUSED until the operator confirms eligibility |
 
-Prior versions used `upstream.projectId`. Move it to `dataSharing.projectId`, **remove** the old property, set `dataSharing.tier`, and audit your `quotas.*.dailyTokens`. The old property is rejected rather than silently overridden.
+The installer cannot infer which Data Sharing projects are enrolled from a
+Project ID, and will never automatically certify them. Do **not** ask the
+user to opt in a Project again if they have already verified it.
 
-Changing project, tier, model lists or quota caps invalidates the SQLite policy fingerprint. Preserve the ledger and UNKNOWN reservations; do not delete the DB to work around `POLICY_CHANGED`. Follow [runbook](runbook.md) for reviewed recovery.
+| Organization tier | Premium/day | Economy/day | Admission at 85% |
+| --- | ---: | ---: | --- |
+| Build | 250,000 | 2,500,000 | 212,500 / 2,125,000 |
+| Launch / Grow | 1,000,000 | 10,000,000 | 850,000 / 8,500,000 |
 
-v0.1 does not support allocating separate free pools per project. Do **not** deploy multiple independent ledgers against one organization's free-token entitlement. This remains a Technical Preview, not a guarantee of zero charges.
+These pools are **shared across the entire organization**, not per Project
+and not per model. The template starts with Build's lower caps and
+requires explicit selection of the actual tier to increase them.
+
+## Quick local configuration
+
+```bash
+npm run onboard
+npm run doctor
+# Only once the user selects an existing Project and verifies their tier:
+npm run onboard -- --project=proj_EXISTING_ID --tier=launch
+```
+
+Do not ask for model IDs. By default both model lists are empty:
+
+```json
+"quotas": {
+  "premium": { "dailyTokens": 250000, "models": [] },
+  "economy": { "dailyTokens": 2500000, "models": [] }
+}
+```
+
+**Both model lists empty means no model-ID whitelist**, not that all models
+are eligible for the free Data Sharing offer. The Proxy and Collector count
+every request in this mode against the smaller **Premium** pool, regardless
+of which group the model actually belongs to. This is conservative for
+token *quantity* but does **not** prevent billing if an ineligible or paid
+model is used. Only officially covered models and API request shapes are
+eligible for complimentary tokens.
+
+An operator who wants stricter controls can configure an optional
+model-ID whitelist (IDs and groups require review of official terms):
+
+```bash
+npm run onboard -- --premium=gpt-6-sol --economy=gpt-5.6-terra
+# Restore no model-ID whitelist before an operational ledger exists
+npm run onboard -- --allow-all
+```
+
+Once either list contains model IDs, both lists together form a strict
+whitelist. No wildcard paid-model fallback is added by QuotaFuse. Never
+delete an existing SQLite ledger to bypass `POLICY_CHANGED` or `UNKNOWN`;
+policy changes require operator reconciliation.
+
+## Existing All projects limitation
+
+The collector observes organization-wide usage but deliberately PAUSES
+if a row is attributed to another Project; this maintains the
+single-routing-Project accounting assumption. **All projects** enrollment
+does not make this a multi-Project quota router. Using other projects
+may consume the same incentive allowance and requires appropriate
+traffic isolation or later explicit multi-Project support.
+
+Use a Project-scoped `OPENAI_API_KEY` in `.env.proxy`, and an independent
+Organization `OPENAI_ADMIN_KEY` in `.env.collector`. The default
+`FREE_ONLY` admission policy and billing verification are fail-closed.
+See [agent install](agent-install.md), [deployment](deployment.md), and
+[billing validation](billing-validation.md).
