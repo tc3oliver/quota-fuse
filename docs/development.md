@@ -16,7 +16,7 @@ npm run check
 npm run demo
 ```
 
-`npm run check` runs TypeScript checks and offline unit/integration/fault tests. `npm run demo` exercises a local mock fallback path; it **does not prove real API billing behavior**. CI runs on Node.js 22 and 24.
+`npm run check` runs TypeScript checks and offline unit/integration/fault tests. `npm run demo` exercises a local mock fallback path; it **does not prove real API billing behavior**. CI runs on Node.js 22 and 24. Keep `@types/node` and TypeScript on their reviewed major versions; Dependabot may update them within each major. Upgrade both majors deliberately after compatibility testing.
 
 ## Review criteria
 
