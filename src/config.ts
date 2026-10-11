@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export type Group = 'premium' | 'economy';
+/** Empty model lists mean no model-specific filter. */
+export function unrestrictedModels(c: Config): boolean {
+  return c.quotas.premium.models.length === 0 && c.quotas.economy.models.length === 0;
+}
 /** Organization incentive tier, not a model/processing service_tier. */
 export type DataSharingTier = 'build' | 'launch' | 'grow';
 export const DATA_SHARING_LIMITS: Readonly<Record<DataSharingTier, Readonly<Record<Group, number>>>> = {

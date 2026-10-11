@@ -1,5 +1,5 @@
 import type { Config, Group } from './config.ts';
-import { utcDay } from './config.ts';
+import { utcDay, unrestrictedModels } from './config.ts';
 import { Ledger, LedgerError } from './ledger.ts';
 
 export interface CollectOptions { fetchImpl?: typeof fetch; now?: Date; adminKey?: string }
@@ -18,6 +18,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
     const end = Math.floor(now.getTime() / 1000);
     const sums: Record<Group, number> = { premium: 0, economy: 0 };
     if (end <= today) throw new Error('Collector must start after UTC midnight');
+    const openMode = unrestrictedModels(config);
     const groups = new Map<string, Group>([...config.quotas.premium.models.map((m): [string, Group] => [m, 'premium']), ...config.quotas.economy.models.map((m): [string, Group] => [m, 'economy'])]);
     const fetchImpl = options.fetchImpl ?? fetch;
     let cursor: string | null = null;
@@ -42,8 +43,9 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
         for (const row of bucket.results) {
           // Unknown/other project usage may consume the same organization-level incentive: pause.
           if (!row || row.project_id !== config.dataSharing.projectId || typeof row.model !== 'string') throw new Error('Unattributed or side-channel usage detected');
-          const group = groups.get(row.model);
-          if (!group) throw new Error('New or unreviewed model observed in org usage');
+          // Mirror admission accounting when no model-to-tier mapping exists.
+          const group = openMode ? 'premium' : groups.get(row.model);
+          if (!group) throw new Error('Model outside the optional whitelist observed in org usage');
           if (!whole(row.input_tokens) || !whole(row.output_tokens)) throw new Error('Untrustworthy official token count');
           sums[group] += row.input_tokens + row.output_tokens;
           if (!Number.isSafeInteger(sums[group])) throw new Error('Overflow in usage sum');

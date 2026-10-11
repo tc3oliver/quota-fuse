@@ -1,4 +1,4 @@
-import { attestedUntil, utcDay, type Config, type Group } from './config.ts';
+import { attestedUntil, utcDay, unrestrictedModels, type Config, type Group } from './config.ts';
 import { Ledger } from './ledger.ts';
 
 export class Denial extends Error {
@@ -7,7 +7,7 @@ export class Denial extends Error {
 }
 export function gate(config: Config, ledger: Ledger, now = new Date()): void {
   const p = config.policy;
-  if ((!config.quotas.premium.models.length && !config.quotas.economy.models.length) || !attestedUntil(p.eligibilityAttestedUntil, now) || !attestedUntil(p.exclusiveOrgTrafficAttestedUntil, now) ||
+  if (!attestedUntil(p.eligibilityAttestedUntil, now) || !attestedUntil(p.exclusiveOrgTrafficAttestedUntil, now) ||
       !attestedUntil(p.manualCostsAuditedUntil, now) || !process.env.OPENAI_API_KEY || !process.env.QG_PROXY_TOKEN || ledger.isPaused() ||
       !p.preflightCostVerified || p.inputCounter !== 'responses_preflight' || ledger.hasCrossDayUnknown(utcDay(now))) {
     throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', 'Production safety gates are not verified');
@@ -18,9 +18,13 @@ export function gate(config: Config, ledger: Ledger, now = new Date()): void {
   }
 }
 export function classify(config: Config, model: unknown): Group {
-  if (typeof model !== 'string') throw new Denial(403, 'MODEL_NOT_ELIGIBLE', 'Exact model ID required');
+  if (typeof model !== 'string' || model.length > 128 || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(model))
+    throw new Denial(403, 'MODEL_NOT_ELIGIBLE', 'Valid exact model ID required');
+  // Empty whitelist accepts any exact model ID. Use the smaller Premium budget
+  // when model group cannot be proven. This cannot guarantee free pricing.
+  if (unrestrictedModels(config)) return 'premium';
   for (const group of ['premium', 'economy'] as const) if (config.quotas[group].models.includes(model)) return group;
-  throw new Denial(403, 'MODEL_NOT_ELIGIBLE', 'Model is not manually approved');
+  throw new Denial(403, 'MODEL_NOT_ELIGIBLE', 'Model is outside the optional whitelist');
 }
 
 type ObjectValue = Record<string, unknown>;

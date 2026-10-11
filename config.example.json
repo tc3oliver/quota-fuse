@@ -10,7 +10,7 @@
     "baseUrl": "https://api.openai.com/v1"
   },
   "dataSharing": {
-    "projectId": "proj_REPLACE_WITH_DEDICATED_PROJECT_ID",
+    "projectId": "proj_SELECT_EXISTING_PROJECT_ID",
     "tier": "build"
   },
   "policy": {

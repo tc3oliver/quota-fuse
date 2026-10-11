@@ -19,7 +19,9 @@
     "test:agent": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test tests/agent/*.test.ts",
     "check": "npm run typecheck && npm test",
     "typecheck": "tsc --noEmit",
-    "demo": "node --disable-warning=ExperimentalWarning --experimental-strip-types examples/e2e-demo.ts"
+    "demo": "node --disable-warning=ExperimentalWarning --experimental-strip-types examples/e2e-demo.ts",
+    "onboard": "node --disable-warning=ExperimentalWarning --experimental-strip-types scripts/onboard.mjs",
+    "doctor": "node --disable-warning=ExperimentalWarning --experimental-strip-types scripts/onboard.mjs --doctor"
   },
   "license": "Apache-2.0",
   "repository": {

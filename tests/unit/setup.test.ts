@@ -26,6 +26,7 @@ test('setup creates separate credentials, config and private file permissions wi
     assert.doesNotMatch(collector, /OPENAI_API_KEY=|QG_PROXY_TOKEN=/);
     assert.equal(cfg.policy.preflightCostVerified, false);
     assert.deepEqual(cfg.quotas.premium.models, []);
+    assert.deepEqual(cfg.quotas.economy.models, []);
     if (process.platform !== 'win32') {
       for (const name of ['config.json','.env.proxy','.env.collector'])
         assert.equal(statSync(join(dir,name)).mode & 0o777, 0o600);

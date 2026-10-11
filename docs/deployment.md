@@ -10,22 +10,24 @@ Install Node.js **22.13 or newer** and npm. From a terminal:
 git clone https://github.com/tc3oliver/quota-fuse.git
 cd quota-fuse
 npm ci
-npm run setup
+npm run onboard
 ```
 
-`setup` creates `config.json`, `.env.proxy` and `.env.collector` with owner-only permissions where the OS supports them. It never overwrites a pre-existing file and generates a new random local access token only when `.env.proxy` is first created. Keep these files private and out of source control. For a checkout migrated from an earlier version, review [the project/tier migration](data-sharing-configuration.md).
+`onboard` creates `config.json`, `.env.proxy` and `.env.collector` with owner-only permissions where the OS supports them, then prints a no-question checklist. Run `npm run doctor` for a read-only local review. It never overwrites a pre-existing file and generates a new random local access token only when `.env.proxy` is first created. Keep these files private and out of source control. For a checkout migrated from an earlier version, review [the project/tier migration](data-sharing-configuration.md).
 
 ## 2. Select your Data Sharing settings
 
 Edit `config.json`:
 
-- `dataSharing.projectId`: the dedicated project's exact ID (`proj_...`).
+- `dataSharing.projectId`: choose **any existing** API Project ID (`proj_...`). The Data Sharing opt-in can be **All projects**; no dedicated Project is needed to qualify.
 - `dataSharing.tier`: confirmed organization tier: `build`, `launch`, or `grow`.
 - `quotas.premium.dailyTokens` and `quotas.economy.dailyTokens`: no greater than your tier's daily token allowances. All eligible models in a group share the same cap.
-- `quotas.*.models`: exact model IDs verified for your project and tier; leave empty until confirmed.
+- `quotas.*.models`: **both empty by default**, meaning no model-ID whitelist. Unknown IDs are conservatively charged against the smaller Premium token budget, but **may still incur actual charges** if ineligible for Data Sharing. A whitelist is optional: `npm run onboard -- --premium=gpt-6-sol --economy=gpt-5.6-terra` before ledger initialization.
 - `policy.safetyPct`: defaults to 85. The project uses a UTC day boundary.
 
-Do not enable `policy.preflightCostVerified` or set future attestation dates until you have followed [billing validation](billing-validation.md), including reviewing actual Costs and your Data Sharing enrollment. The template intentionally **rejects inference**.
+Use `npm run onboard -- --project=proj_YOUR_EXISTING_ID --tier=launch` to set non-secret values. Confirm your actual org tier. Read [agent install](agent-install.md) for an agent-guided, minimal-question setup. A changed persisted ledger policy requires operator reconciliation, not deleting the database. Do not enable `policy.preflightCostVerified` or set future attestation dates until you have followed [billing validation](billing-validation.md), including checking actual Costs and preflight operation. The template intentionally **rejects inference**.
+
+**All projects caution:** complimentary tokens are shared organization-wide, but this release's collector currently rejects cross-project usage and pauses admissions. OpenAI All projects enrollment does not lift that QuotaFuse accounting restriction.
 
 ## 3. Configure separate API keys
 
@@ -64,7 +66,7 @@ To stop, use Ctrl+C in each service terminal and preserve `data/`.
 
 ## 5. Confirm before sending any real requests
 
-Review the [billing validation checklist](billing-validation.md), including dedicated-project enrollment, current tier, exact model eligibility, input counter behavior, unexpected Costs, exclusive organization traffic and expiring operator attestations.
+Review the [billing validation checklist](billing-validation.md), including your existing All projects or selected-project enrollment, current tier, exact model eligibility, input counter behavior, unexpected Costs, exclusive organization traffic and expiring operator attestations.
 
 **Do not enable live inference based on a successful install or collector poll alone.** OpenAI Usage API is delayed and does not confirm atomically remaining complimentary capacity.
 
@@ -72,7 +74,7 @@ Review the [billing validation checklist](billing-validation.md), including dedi
 
 | Symptom | Cause and next step |
 | --- | --- |
-| `PAUSED` on first launch | Expected: the model allowlist and billing attestations are not verified |
+| `PAUSED` on first launch | Expected: the billing attestations and collector readiness are not verified |
 | `npm run status:local` cannot connect | Ensure `npm run start:local` is running on the same host |
 | `COLLECTOR_UNVERIFIED` | Confirm Admin key, org permissions, network, full usage pagination and project mapping |
 | `POLICY_CHANGED` | A project, tier or model policy changed; follow the [operator runbook](runbook.md), never delete the DB |
