@@ -5,6 +5,9 @@ import { mkdtempSync, readFileSync, copyFileSync, writeFileSync, mkdirSync, rmSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Ledger } from '../../src/ledger.ts';
+import { utcDay } from '../../src/config.ts';
+import { acquireInstanceLock } from '../../src/instance-lock.ts';
 const onboard=fileURLToPath(new URL('../../scripts/onboard.mjs',import.meta.url));
 const template=fileURLToPath(new URL('../../config.example.json',import.meta.url));
 function fixture() {
@@ -99,5 +102,49 @@ test('doctor is read-only and does not print existing secrets',()=>{
    assert.match(r.stdout,/Project API key: present/);
    assert.match(r.stdout,/Admin API key: present/);
    assert.doesNotMatch(r.stdout,/sk-SECRET|sk-ADMIN-SECRET/);
+ }finally{f.close();}
+});
+
+test('bootstrap can select Project after an empty PAUSED ledger was created by initial Proxy startup',()=>{
+ const f=fixture();
+ try{
+   assert.equal(f.run().status,0);
+   const db=join(f.dir,'data','quota-guard.sqlite');
+   const l=new Ledger(db);l.assertPolicy(f.read());l.close();
+   const r=f.run('--project=proj_ExistingProject987','--tier=launch');
+   assert.equal(r.status,0,r.stderr);
+   assert.equal(f.read().dataSharing.projectId,'proj_ExistingProject987');
+   const next=new Ledger(db,{recoverPending:false});
+   try{ assert.doesNotThrow(()=>next.verifyPolicy(f.read())); }
+   finally{next.close();}
+   assert.equal(existsSync(db),true);
+ }finally{f.close();}
+});
+
+test('bootstrap refuses policy change when ledger has official observations or running locks',()=>{
+ const f=fixture();
+ try{
+   assert.equal(f.run().status,0);
+   const db=join(f.dir,'data','quota-guard.sqlite');
+   const ledger=new Ledger(db);
+   ledger.assertPolicy(f.read());
+   ledger.close();
+   const unlock=acquireInstanceLock(db,'proxy');
+   try{
+     const denied=f.run('--tier=launch');
+     assert.equal(denied.status,1);
+     assert.match(denied.stderr,/Existing SQLite ledger/);
+     assert.equal(f.read().dataSharing.tier,'build');
+   }finally{unlock();}
+   const history=new Ledger(db);
+   try{history.recordObservation(utcDay(),'premium',0);}
+   finally{history.close();}
+   const denied=f.run('--tier=launch');
+   assert.equal(denied.status,1);
+   assert.match(denied.stderr,/Existing SQLite ledger/);
+   assert.equal(f.read().dataSharing.tier,'build');
+   const preserved=new Ledger(db,{recoverPending:false});
+   try{ assert.ok(preserved.observation(utcDay(),'premium')); }
+   finally{preserved.close();}
  }finally{f.close();}
 });

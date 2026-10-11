@@ -34,7 +34,7 @@ Use `npm run onboard -- --project=proj_YOUR_EXISTING_ID --tier=launch` to set no
 For a simpler setup, the **user** can open an independent local Terminal and
 run `npm run configure:local`. This single wizard guides missing Project ID,
 optional org tier and both API Keys; the keys are not echoed or copied into
-an agent chat. Existing keys are preserved. It refuses redirected input.
+an agent chat. Existing keys are preserved. It refuses redirected input. If Proxy or Collector was previously started with a placeholder Project, stop both before configuring: an empty PAUSED ledger can be rebound safely; any ledger with history requires operator review.
 Agents must **never** invoke the wizard inside their captured PTY.
 
 

@@ -7,6 +7,8 @@ import { readFileSync, writeFileSync, renameSync, unlinkSync, existsSync, chmodS
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateConfig, DATA_SHARING_LIMITS, unrestrictedModels } from '../src/config.ts';
+import { Ledger } from '../src/ledger.ts';
+import { acquireInstanceLock } from '../src/instance-lock.ts';
 
 const MODEL_DOC = 'https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai';
 const PROJECTS = 'https://platform.openai.com/settings/organization/projects';
@@ -99,9 +101,33 @@ try {
       }
     }
     if (modified) {
-      if (next.server.storage !== ':memory:' && existsSync(resolve(next.server.storage)))
-        throw new Error('Existing SQLite ledger detected. Policy changes require operator reconciliation (docs/runbook.md). No files modified.');
-      saveConfig(next, file);
+      const db=next.server.storage;
+      if (db !== ':memory:' && existsSync(resolve(db))) {
+        // Bootstrapping a PAUSED empty ledger is safe; usage-bearing ledgers
+        // still fail closed. Neither running service may hold an instance lock.
+        const release=[];
+        let ledger;
+        try {
+          release.push(acquireInstanceLock(db,'proxy'));
+          release.push(acquireInstanceLock(db,'collector'));
+          ledger=new Ledger(db,{recoverPending:false});
+          ledger.rebindPristinePolicy(next);
+          try { saveConfig(next,file); }
+          catch(e) {
+            // Retain the original config and fingerprint together if writing fails.
+            ledger.rebindPristinePolicy(current);
+            throw e;
+          }
+          console.log('Updated policy fingerprint for a verified empty, paused ledger; no usage rows removed.');
+        } catch(e) {
+          throw new Error('Existing SQLite ledger: ' + e.message +
+            '. Stop Proxy/Collector and retry only if it is a fresh unused ledger.');
+        } finally {
+          try { ledger?.close(); } finally { for(const unlock of release.reverse())unlock(); }
+        }
+      } else {
+        saveConfig(next,file);
+      }
       console.log('Updated local config.json; billing policy and credentials unchanged.');
     }
   }

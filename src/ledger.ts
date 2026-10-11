@@ -77,6 +77,26 @@ export class Ledger {
       }
     });
   }
+  /**
+   * Initial setup may need a Project/tier choice after the Proxy has created
+   * an EMPTY, PAUSED SQLite ledger. Allow a policy rebind only when absolutely
+   * no usage, observations, or manual reconciliation history exists.
+   * Caller must hold both proxy and collector instance locks.
+   */
+  rebindPristinePolicy(config: Config): void {
+    this.tx(() => {
+      const paused = this.db.prepare('SELECT paused_reason FROM guard_control WHERE id=1').get() as {paused_reason:string|null}|undefined;
+      if (!paused || paused.paused_reason === null)
+        throw new LedgerError('POLICY_CHANGED', 'Cannot change a running or unpaused ledger policy');
+      for (const name of ['reservations','observations','reconciliation_audit'] as const) {
+        const count = this.db.prepare('SELECT COUNT(*) AS n FROM ' + name).get() as {n:number};
+        if (count.n !== 0)
+          throw new LedgerError('POLICY_CHANGED', 'Ledger already contains usage or audit history: operator reconciliation required');
+      }
+      const next = this.policyHash(config);
+      this.db.prepare('INSERT INTO policy_fingerprint(id,sha256) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET sha256=excluded.sha256').run(next);
+    });
+  }
   pauseReason(): string | null { return (this.db.prepare('SELECT paused_reason FROM guard_control WHERE id=1').get() as {paused_reason:string|null}).paused_reason; }
   isPaused(): boolean { return this.pauseReason() !== null; }
   setPause(reason: string | null): void {

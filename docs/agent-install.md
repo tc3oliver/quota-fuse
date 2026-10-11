@@ -122,6 +122,13 @@ eligibility and protocol support for that model before live traffic.
 npm run configure:local
 ```
 
+If the Agent previously started Proxy/Collector while the Project ID was
+still a placeholder, **stop both services first**. Onboarding can safely
+rebind a **pristine, paused** SQLite ledger with zero reservations, zero
+official observations and zero audit entries; it never deletes data or
+rewrites a ledger with usage history. A running lock or nonempty ledger
+continues to block policy changes. Never remove lock files by hand.
+
 The wizard does **not** call OpenAI, print keys, or mark billing checks verified.
 It skips already configured keys, preserves permissions, and only needs a
 routing Project ID when missing. The Project ID is an ordinary configuration
