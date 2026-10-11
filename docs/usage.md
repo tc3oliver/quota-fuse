@@ -6,7 +6,7 @@ The local proxy listens on `http://127.0.0.1:8787` by default. It is not a trans
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /v1/responses` | Stateless multi-turn text; optional separately audited local functions/JSON output; JSON/SSE |
+| `POST /v1/responses` | Stateless multi-turn text and client-side functions; structured JSON is separately gated; JSON/SSE |
 | `POST /v1/chat/completions` | Bounded text-only Chat adapter to Responses; JSON/SSE |
 | `GET /v1/models` | Manually verified, currently allowed model IDs |
 | `GET /quota` | Guarded local capacity estimate (not official free balance) |

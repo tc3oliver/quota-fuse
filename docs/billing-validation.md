@@ -2,6 +2,9 @@
 
 QuotaFuse does **not** know the official remaining Data Sharing balance and cannot guarantee zero charges.
 
+**Client-defined Function Calling:** Functions executed by the local agent (file, Bash, Git, or agent-managed MCP operations) do not incur separate OpenAI-hosted tool execution fees. Their definitions, arguments and responses still consume model tokens, and QuotaFuse applies the same model allowlist, input preflight, SQLite reservation and collector policy as for other text requests. The official Data Sharing exclusion for *tool use* does not explicitly clarify these native client-side function-call model tokens; the absence of hosted tool fees is **not** proof of complimentary model tokens. No extra function-specific attestation is required by QuotaFuse, but live inference remains subject to the general billing validation gates below. Hosted OpenAI tools continue to be rejected.
+
+
 ## Credentials and source of truth
 
 - Proxy: `OPENAI_API_KEY` (dedicated `dataSharing.projectId`, generation and exact input preflight; server-controlled `OpenAI-Project` header).
