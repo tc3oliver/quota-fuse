@@ -19,9 +19,10 @@ export interface Config {
     inputCounter: 'reject' | 'responses_preflight'; preflightCostVerified: boolean;
     eligibilityAttestedUntil: string | null; exclusiveOrgTrafficAttestedUntil: string | null;
     manualCostsAuditedUntil: string | null; reconcileMaxAgeSeconds: number;
-    /** Separate opt-in gates; neither is implied by normal Data Sharing enrollment. */
-    localFunctionBillingVerifiedUntil?: string | null;
-    structuredTextBillingVerifiedUntil?: string | null;
+    /** Format-specific audit, distinct from general token incentive enrollment. */
+    structuredTextVerified?: boolean; structuredTextAttestedUntil?: string | null;
+    /** Self-hosted agent functions are still API tool use and are opt-in ONLY after billing evidence. */
+    localFunctionsVerified?: boolean; localFunctionsAttestedUntil?: string | null;
   };
   quotas: Record<Group, { dailyTokens: number; models: string[] }>;
 }
@@ -56,10 +57,12 @@ export function validateConfig(c: Config): Config {
       seen.add(model);
     }
   }
-  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil', 'localFunctionBillingVerifiedUntil', 'structuredTextBillingVerifiedUntil'] as const) {
+  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil', 'structuredTextAttestedUntil', 'localFunctionsAttestedUntil'] as const) {
     const val = c.policy[prop];
-    if (val !== undefined && val !== null && (typeof val !== 'string' || !Number.isFinite(Date.parse(val)))) throw new Error('Invalid attestation timestamp: ' + prop);
+    if (val !== null && val !== undefined && (typeof val !== 'string' || !Number.isFinite(Date.parse(val)))) throw new Error('Invalid attestation timestamp: ' + prop);
   }
+  for (const feature of ['structuredTextVerified', 'localFunctionsVerified'] as const)
+    if (c.policy[feature] !== undefined && typeof c.policy[feature] !== 'boolean') throw new Error('Invalid feature gate ' + feature);
   return c;
 }
 export function loadConfig(path = process.env.QG_CONFIG ?? './config.json'): Config {

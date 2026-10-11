@@ -23,237 +23,208 @@ export function classify(config: Config, model: unknown): Group {
   throw new Denial(403, 'MODEL_NOT_ELIGIBLE', 'Model is not manually approved');
 }
 
-type JsonObject = Record<string, unknown>;
-export interface ApprovedRequest {
-  body: JsonObject;
-  preflight: JsonObject;
-  group: Group;
-  maxOutput: number;
-  chat: boolean;
-  includeUsage: boolean;
+type ObjectValue = Record<string, unknown>;
+const record = (v: unknown): v is ObjectValue => v !== null && typeof v === 'object' && !Array.isArray(v);
+const fail = (msg: string): never => { throw new Denial(403, 'PAID_FEATURE_BLOCKED', msg); };
+function keys(obj: ObjectValue, allowed: readonly string[], where: string): void {
+  for (const key of Object.keys(obj)) if (!allowed.includes(key)) fail('Unsupported ' + where + ' parameter: ' + key);
 }
-function obj(v: unknown): v is JsonObject { return v !== null && typeof v === 'object' && !Array.isArray(v); }
-function fail(message: string): never { throw new Denial(403, 'PAID_FEATURE_BLOCKED', message); }
-function only(o: JsonObject, keys: readonly string[], what: string): void {
-  for (const key of Object.keys(o)) if (!keys.includes(key)) fail('Unsupported ' + what + ' field: ' + key);
+function boundedText(v: unknown, what: string, allowEmpty = false): string {
+  if (typeof v !== 'string' || (!allowEmpty && v.length === 0) || v.length > 1048576) fail('Invalid ' + what);
+  return v as string;
 }
-function name(v: unknown): v is string { return typeof v === 'string' && /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/.test(v); }
-function string(v: unknown, max = 1048576): v is string { return typeof v === 'string' && Buffer.byteLength(v) <= max; }
-function audited(config: Config, field: 'localFunctionBillingVerifiedUntil' | 'structuredTextBillingVerifiedUntil'): void {
-  if (!attestedUntil(config.policy[field] ?? null, new Date()))
-    throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', field + ' requires independently reviewed billing eligibility');
+const functionName = (v: unknown): v is string => typeof v === 'string' && /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/.test(v);
+function audited(config: Config, feature: 'localFunctions' | 'structuredText', now: Date): void {
+  const p = config.policy;
+  const enabled = feature === 'localFunctions' ? p.localFunctionsVerified : p.structuredTextVerified;
+  const until = feature === 'localFunctions' ? p.localFunctionsAttestedUntil : p.structuredTextAttestedUntil;
+  if (enabled !== true || !attestedUntil(until ?? null, now))
+    throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', feature + ' billing eligibility has not been independently verified');
 }
-function schema(value: unknown, label: string): JsonObject {
-  if (!obj(value)) fail(label + ' must be a JSON Schema object');
-  const bytes = Buffer.byteLength(JSON.stringify(value));
-  if (bytes > 32768) fail(label + ' exceeds 32 KiB');
-  let nodes = 0;
-  const visit = (v: unknown, depth: number): void => {
-    if (depth > 16 || ++nodes > 4096) fail(label + ' exceeds schema complexity limits');
-    if (Array.isArray(v)) { for (const part of v) visit(part, depth + 1); return; }
-    if (obj(v)) {
-      for (const [k, part] of Object.entries(v)) {
-        if (k === '$ref' && (typeof part !== 'string' || !part.startsWith('#/')))
-          fail('Only local JSON Schema references are accepted');
-        visit(part, depth + 1);
-      }
-    }
-  };
-  visit(value, 0);
-  return value;
+function schema(value: unknown, label: string): ObjectValue {
+  if (!record(value) || value.type !== 'object') fail(label + ' requires an object JSON schema');
+  const encoded = JSON.stringify(value);
+  if (encoded.length > 32768) fail(label + ' schema too large');
+  // Only declarative JSON schema. These references must not fetch external files.
+  if (/"\\$ref"\s*:\s*"(?!(?:#\/|#"))/.test(encoded)) fail('External schema references prohibited');
+  return value as ObjectValue;
 }
-function checkTextFormat(format: unknown): JsonObject {
-  if (!obj(format)) fail('text.format must be an object');
-  if (format.type === 'text' || format.type === 'json_object') {
-    only(format, ['type'], 'text.format');
-    return format;
+function textFormat(config: Config, v: unknown, now: Date): ObjectValue {
+  if (!record(v)) fail('Invalid text format');
+  keys(v, ['format'], 'text');
+  if (!record(v.format)) fail('Missing text.format');
+  const f = v.format;
+  if (f.type === 'text') { keys(f, ['type'], 'text.format'); return {format:{type:'text'}}; }
+  audited(config, 'structuredText', now);
+  if (f.type === 'json_object') { keys(f, ['type'], 'text.format'); return {format:{type:'json_object'}}; }
+  if (f.type === 'json_schema') {
+    keys(f, ['type','name','schema','strict','description'], 'text.format');
+    if (!functionName(f.name) || f.strict !== true) fail('Strict named JSON schema required');
+    if (f.description !== undefined) boundedText(f.description,'schema description',true);
+    return {format: f};
   }
-  if (format.type === 'json_schema') {
-    only(format, ['type', 'name', 'description', 'schema', 'strict'], 'text.format');
-    if (!name(format.name) || !string(format.description ?? '', 2048) ||
-      (format.strict !== undefined && typeof format.strict !== 'boolean')) fail('Invalid JSON Schema format');
-    schema(format.schema, 'text.format.schema');
-    return format;
-  }
-  return fail('Only text, json_object and json_schema output formats are supported');
+  return fail('Unsupported structured output format');
 }
-function textFromMessage(item: JsonObject): JsonObject {
-  only(item, ['type', 'role', 'content'], 'message');
-  if (item.type !== undefined && item.type !== 'message') fail('Unsupported message type');
-  if (!['user','assistant','system','developer'].includes(item.role as string)) fail('Invalid message role');
-  if (string(item.content)) return { role: item.role, content: item.content };
-  if (!Array.isArray(item.content) || !item.content.length || item.content.length > 128)
-    fail('Only non-empty text message content is allowed');
-  const parts: JsonObject[] = [];
-  for (const part of item.content) {
-    if (!obj(part)) fail('Message content part must be an object');
-    only(part, ['type','text'], 'text part');
-    if ((part.type !== 'input_text' && part.type !== 'output_text') || !string(part.text))
-      fail('Multimodal and non-text parts are blocked');
-    parts.push(part);
-  }
-  return { role: item.role, content: parts };
-}
-function history(input: unknown): { input: unknown; hasFunctions: boolean } {
-  if (typeof input === 'string' && input.length > 0) return { input, hasFunctions: false };
-  if (!Array.isArray(input) || !input.length || input.length > 128) fail('Expected bounded text-only message history');
-  const calls = new Set<string>(), results = new Set<string>();
-  const converted: JsonObject[] = [];
-  let hasFunctions = false;
-  for (const item of input) {
-    if (!obj(item)) fail('Input history items must be objects');
-    if (item.type === 'function_call') {
-      only(item, ['type','id','name','call_id','arguments','status'], 'function_call');
-      if (!name(item.name) || !string(item.call_id, 128) || !(item.call_id as string).length ||
-          !string(item.arguments) || (item.id !== undefined && !string(item.id, 128)) ||
-          (item.status !== undefined && item.status !== 'completed') || calls.has(item.call_id as string))
-        fail('Invalid or duplicate function_call');
-      calls.add(item.call_id as string); hasFunctions = true;
-      converted.push(item);
-    } else if (item.type === 'function_call_output') {
-      only(item, ['type','call_id','output'], 'function_call_output');
-      if (!string(item.call_id, 128) || !calls.has(item.call_id) || results.has(item.call_id) || !string(item.output))
-        fail('Unmatched or invalid function_call_output');
-      results.add(item.call_id); hasFunctions = true;
-      converted.push(item);
-    } else {
-      converted.push(textFromMessage(item));
-    }
-  }
-  return { input: converted, hasFunctions };
-}
-function functionTools(value: unknown): JsonObject[] {
-  if (!Array.isArray(value) || !value.length || value.length > 32) fail('Expected 1 to 32 local function declarations');
+function validateFunctionTools(config: Config, input: unknown, now: Date): ObjectValue[] {
+  if (!Array.isArray(input) || input.length === 0 || input.length > 16) fail('Expected 1-16 local functions');
+  audited(config,'localFunctions',now);
   const names = new Set<string>();
-  return value.map(v => {
-    if (!obj(v)) fail('Tool declaration must be an object');
-    only(v, ['type','name','description','parameters','strict'], 'tool');
-    if (v.type !== 'function' || !name(v.name) || names.has(v.name) || !string(v.description ?? '', 4096) ||
-       (v.strict !== undefined && typeof v.strict !== 'boolean'))
-      fail('Only unique client-executed function tools are allowed');
-    names.add(v.name);
-    if (v.parameters !== undefined) schema(v.parameters, 'tool.parameters');
-    return v;
+  return input.map((tool: unknown) => {
+    if (!record(tool) || tool.type !== 'function') fail('Only client-side function tools permitted');
+    keys(tool,['type','name','description','parameters','strict'],'function tool');
+    if (!functionName(tool.name) || names.has(tool.name)) fail('Invalid or duplicate function name');
+    names.add(tool.name);
+    if (tool.description !== undefined) boundedText(tool.description,'function description',true);
+    if (tool.strict !== undefined && typeof tool.strict !== 'boolean') fail('Invalid function strict setting');
+    if (tool.parameters !== undefined) schema(tool.parameters, 'function parameters');
+    return tool as ObjectValue;
   });
 }
-function functionChoice(choice: unknown, names: Set<string>): unknown {
-  if (choice === undefined) return undefined;
-  if (choice === 'auto' || choice === 'none' || choice === 'required') return choice;
-  if (obj(choice)) {
-    only(choice, ['type','name'], 'tool_choice');
-    if (choice.type === 'function' && typeof choice.name === 'string' && names.has(choice.name)) return choice;
-  }
-  return fail('Invalid or unsupported tool_choice');
-}
-function chatInput(raw: JsonObject): { input: unknown; tools?: JsonObject[]; choice?: unknown; output?: JsonObject; includeUsage: boolean } {
-  only(raw, ['model','messages','max_completion_tokens','max_tokens','stream','stream_options','n','store','tools','tool_choice','parallel_tool_calls','response_format'], 'chat request');
-  if (raw.n !== undefined && raw.n !== 1) fail('Only n=1 is supported');
-  if (!Array.isArray(raw.messages) || !raw.messages.length || raw.messages.length > 128) fail('Expected bounded chat messages');
-  const items: JsonObject[] = [];
-  for (const message of raw.messages) {
-    if (!obj(message)) fail('Chat message must be an object');
-    if (message.role === 'tool') {
-      only(message, ['role','tool_call_id','content'], 'tool reply');
-      if (!string(message.tool_call_id, 128) || !string(message.content))
-        fail('Invalid tool reply');
-      items.push({ type:'function_call_output', call_id:message.tool_call_id, output:message.content });
-    } else if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
-      only(message, ['role','content','tool_calls'], 'assistant tool message');
-      if (message.content !== null && message.content !== undefined && !string(message.content)) fail('Invalid assistant content');
-      if (message.content) items.push({ role:'assistant', content:message.content });
-      for (const call of message.tool_calls) {
-        if (!obj(call) || call.type !== 'function' || !obj(call.function) ||
-          !string(call.id, 128) || !name(call.function.name) || !string(call.function.arguments)) fail('Invalid chat function call');
-        only(call, ['id','type','function'], 'chat tool call');
-        only(call.function, ['name','arguments'], 'chat tool function');
-        items.push({ type:'function_call', call_id:call.id, name:call.function.name, arguments:call.function.arguments });
+function validatedInput(config: Config, input: unknown, now: Date): unknown {
+  if (typeof input === 'string') return boundedText(input,'input');
+  if (!Array.isArray(input) || !input.length || input.length > 256) fail('Expected 1-256 text input items');
+  const calls = new Set<string>();
+  return input.map((item: unknown) => {
+    if (!record(item)) fail('Input item must be an object');
+    if (item.type === 'function_call' || item.type === 'function_call_output') {
+      audited(config,'localFunctions',now);
+      if (item.type === 'function_call') {
+        keys(item,['type','name','call_id','arguments','id','status'],'function_call');
+        if (!functionName(item.name) || typeof item.call_id !== 'string' || item.call_id.length > 256 || !item.call_id || calls.has(item.call_id)) fail('Invalid function_call');
+        if (item.id !== undefined) boundedText(item.id, 'function_call ID');
+        if (item.status !== undefined && item.status !== 'completed') fail('Only completed function calls accepted in history');
+        boundedText(item.arguments,'function arguments',true);
+        calls.add(item.call_id);
+      } else {
+        keys(item,['type','call_id','output'],'function_call_output');
+        if (typeof item.call_id !== 'string' || !calls.has(item.call_id)) fail('Tool result does not match a preceding function call');
+        boundedText(item.output,'function output',true);
+        calls.delete(item.call_id);
       }
-    } else {
-      only(message, ['role','content'], 'chat message');
-      if (!['user','assistant','system','developer'].includes(message.role as string) || !string(message.content))
-        fail('Only text Chat messages are supported');
-      items.push({role:message.role, content:message.content});
+      return item;
     }
-  }
-  let tools: JsonObject[] | undefined;
-  if (raw.tools !== undefined) {
-    if (!Array.isArray(raw.tools)) fail('Invalid chat tools');
-    tools = raw.tools.map(t => {
-      if (!obj(t) || t.type !== 'function' || !obj(t.function)) fail('Only local function tools are supported');
-      only(t, ['type','function'], 'chat tool');
-      return { type:'function', ...t.function };
-    });
-  }
-  let choice: unknown = raw.tool_choice;
-  if (obj(choice) && choice.type === 'function' && obj(choice.function)) {
-    only(choice, ['type','function'], 'chat tool choice');
-    only(choice.function, ['name'], 'chat tool choice function');
-    choice = { type:'function', name:choice.function.name };
-  }
-  let output: JsonObject | undefined;
-  if (raw.response_format !== undefined) {
-    if (!obj(raw.response_format)) fail('Invalid chat response_format');
-    if (raw.response_format.type === 'json_schema' && obj(raw.response_format.json_schema)) {
-      only(raw.response_format, ['type','json_schema'], 'response_format');
-      output = { format: { type:'json_schema', ...raw.response_format.json_schema } };
-    } else { only(raw.response_format, ['type'], 'response_format'); output = {format: raw.response_format}; }
-  }
-  if (raw.stream_options !== undefined) {
-    if (!obj(raw.stream_options)) fail('Invalid stream_options');
-    only(raw.stream_options, ['include_usage'], 'stream_options');
-    if (typeof raw.stream_options.include_usage !== 'boolean' || raw.stream !== true) fail('Invalid stream_options.include_usage');
-  }
-  if (raw.max_tokens !== undefined && raw.max_completion_tokens !== undefined) fail('Only one max token cap may be set');
-  return { input:items, tools, choice, output, includeUsage:raw.stream_options !== undefined && (raw.stream_options as JsonObject).include_usage === true };
+    if (item.type === 'reasoning') {
+      audited(config,'localFunctions',now);
+      keys(item,['type','id','encrypted_content','summary'],'reasoning');
+      boundedText(item.id, 'reasoning id');
+      boundedText(item.encrypted_content,'encrypted reasoning');
+      if (item.summary !== undefined && (!Array.isArray(item.summary) || item.summary.length !== 0)) fail('Reasoning summary unsupported');
+      return item;
+    }
+    keys(item,['role','content'],'message');
+    if (!['user','assistant','system','developer'].includes(String(item.role))) fail('Unsupported message role');
+    if (typeof item.content === 'string') boundedText(item.content,'message content',true);
+    else if (Array.isArray(item.content) && item.content.length > 0 && item.content.length <= 64) {
+      for (const c of item.content) {
+        if (!record(c)) fail('Invalid content block');
+        keys(c,['type','text'],'content block');
+        if (!['input_text','output_text'].includes(String(c.type))) fail('Image, audio and other modalities unsupported');
+        if (item.role === 'assistant' && c.type !== 'output_text') fail('Assistant content must use output_text');
+        if (item.role !== 'assistant' && c.type !== 'input_text') fail('User/system content must use input_text');
+        boundedText(c.text, 'content text',true);
+      }
+    } else fail('Only text content supported');
+    return item;
+  });
 }
-export function validateRequest(config: Config, endpoint: string, raw: unknown): ApprovedRequest {
-  if (!obj(raw)) throw new Denial(400, 'BAD_REQUEST', 'JSON object required');
-  const group = classify(config, raw.model);
-  const chat = endpoint === '/v1/chat/completions';
-  let input: unknown = raw.input, tools: JsonObject[] | undefined, choice: unknown, output: JsonObject | undefined;
-  let includeUsage = false;
-  let maxOutput: unknown = raw.max_output_tokens;
-  if (chat) {
-    const data = chatInput(raw);
-    input=data.input; tools=data.tools; choice=data.choice; output=data.output; includeUsage=data.includeUsage;
-    maxOutput = raw.max_completion_tokens ?? raw.max_tokens;
-  } else {
-    only(raw, ['model','input','instructions','max_output_tokens','stream','store','tools','tool_choice','parallel_tool_calls','text'], 'Responses request');
-    if (raw.instructions !== undefined && !string(raw.instructions)) fail('Only text instructions are supported');
-    tools = raw.tools !== undefined ? functionTools(raw.tools) : undefined;
-    choice = raw.tool_choice;
-    output = raw.text !== undefined ? raw.text as JsonObject : undefined;
+export interface ValidatedRequest {
+  body: ObjectValue; group: Group; maxOutput: number; clientMode: 'responses'|'chat'; hasFunctions: boolean;
+}
+export function validateRequest(config: Config, endpoint: string, raw: unknown, now = new Date()): ValidatedRequest {
+  if (!record(raw)) throw new Denial(400,'BAD_REQUEST','JSON object required');
+  const group = classify(config,raw.model);
+  const mode = endpoint === '/v1/chat/completions' ? 'chat' : 'responses';
+  let req = raw;
+  if (mode === 'chat') {
+    keys(req,['model','messages','max_completion_tokens','stream','n','tools','tool_choice','parallel_tool_calls','response_format'],'chat');
+    if (req.n !== undefined && req.n !== 1) fail('Only n=1 supported');
+    if (!Array.isArray(req.messages) || !req.messages.length || req.messages.length > 256) fail('Invalid Chat messages');
+    const mapped: ObjectValue[] = [];
+    for (const msg of req.messages) {
+      if (!record(msg)) fail('Invalid Chat message');
+      if (msg.role === 'tool') {
+        keys(msg,['role','tool_call_id','content'],'tool message');
+        mapped.push({type:'function_call_output',call_id:msg.tool_call_id,output:msg.content});
+      } else if (['user','assistant','system','developer'].includes(String(msg.role))) {
+        keys(msg,['role','content','tool_calls'],'chat message');
+        if (msg.content !== null && msg.content !== undefined) mapped.push({role:msg.role,content:msg.content});
+        if (msg.tool_calls !== undefined) {
+          if (msg.role !== 'assistant' || !Array.isArray(msg.tool_calls) || !msg.tool_calls.length || msg.tool_calls.length>16) fail('Invalid assistant tool calls');
+          for (const call of msg.tool_calls) {
+            if (!record(call) || call.type !== 'function' || !record(call.function)) fail('Invalid local tool call');
+            keys(call,['id','type','function'],'chat tool call');
+            keys(call.function,['name','arguments'],'chat function');
+            mapped.push({type:'function_call',call_id:call.id,name:call.function.name,arguments:call.function.arguments});
+          }
+        }
+      } else fail('Unsupported Chat role');
+    }
+    let convertedTools: ObjectValue[] | undefined;
+    if (req.tools !== undefined) {
+      if (!Array.isArray(req.tools)) fail('Chat tools must be an array');
+      convertedTools = req.tools.map((t: unknown) => {
+        if (!record(t) || t.type !== 'function' || !record(t.function)) fail('Only local Chat functions supported');
+        keys(t,['type','function'],'chat tools');
+        return {type:'function',...t.function};
+      });
+    }
+    let choice = req.tool_choice;
+    if (record(choice)) {
+      if (choice.type !== 'function' || !record(choice.function)) fail('Unsupported Chat tool choice');
+      keys(choice,['type','function'],'Chat tool choice');
+      choice = {type:'function',name:choice.function.name};
+    }
+    let text: ObjectValue | undefined;
+    if (req.response_format !== undefined) {
+      if (!record(req.response_format)) fail('Invalid response_format');
+      const f = req.response_format;
+      if (f.type === 'json_schema') {
+        keys(f,['type','json_schema'],'response_format');
+        if (!record(f.json_schema)) fail('Invalid json_schema');
+        text={format:{type:'json_schema',...f.json_schema}};
+      } else { keys(f,['type'],'response_format'); text={format:f}; }
+    }
+    req = {
+      model:req.model, input:mapped, max_output_tokens:req.max_completion_tokens, stream:req.stream,
+      ...(convertedTools ? {tools:convertedTools} : {}),
+      ...(choice!==undefined ? {tool_choice:choice} : {}),
+      ...(req.parallel_tool_calls!==undefined ? {parallel_tool_calls:req.parallel_tool_calls} : {}),
+      ...(text ? {text} : {})
+    };
+  } else keys(req,['model','input','instructions','max_output_tokens','stream','store','tools','tool_choice','parallel_tool_calls','text','include'],'Responses');
+  const approved: ObjectValue = {model:req.model,input:validatedInput(config,req.input,now),max_output_tokens:req.max_output_tokens,store:false};
+  if (req.instructions !== undefined) approved.instructions=boundedText(req.instructions,'instructions');
+  if (req.stream !== undefined) {
+    if (typeof req.stream !== 'boolean') throw new Denial(400,'BAD_REQUEST','stream must be boolean');
+    approved.stream=req.stream;
   }
-  if (raw.store !== undefined && raw.store !== false) fail('Stored conversations are disabled');
-  if (raw.stream !== undefined && typeof raw.stream !== 'boolean') throw new Denial(400,'BAD_REQUEST','stream must be boolean');
-  if (!Number.isSafeInteger(maxOutput) || (maxOutput as number) < 1 || (maxOutput as number) > config.policy.maxOutputTokens)
-    fail('Explicit bounded output token cap required');
-  const checked = history(input);
-  if (tools && chat) tools = functionTools(tools);
-  if (choice !== undefined) {
-    choice = functionChoice(choice, new Set((tools ?? []).map(t=>t.name as string)));
-    if (!tools && choice !== 'none') fail('Tool choice requires local tools');
+  if (req.store !== undefined && req.store !== false) fail('Stored responses are disabled');
+  if (req.text !== undefined) approved.text=textFormat(config,req.text,now);
+  if (req.include !== undefined) {
+    audited(config,'localFunctions',now);
+    if (!Array.isArray(req.include) || req.include.length !== 1 || req.include[0] !== 'reasoning.encrypted_content')
+      fail('Only reasoning.encrypted_content include supported');
+    approved.include=req.include;
   }
-  const usesFunctions = !!tools || checked.hasFunctions;
-  if (usesFunctions) audited(config,'localFunctionBillingVerifiedUntil');
-  if (raw.parallel_tool_calls !== undefined && (typeof raw.parallel_tool_calls !== 'boolean' || !tools))
-    fail('parallel_tool_calls requires local function tools');
-  if (output !== undefined) {
-    if (!obj(output)) fail('Invalid text configuration');
-    only(output, ['format'], 'text');
-    const fmt=checkTextFormat(output.format);
-    if (fmt.type !== 'text') audited(config,'structuredTextBillingVerifiedUntil');
+  let hasFunctions = false;
+  if (req.tools !== undefined) { approved.tools=validateFunctionTools(config,req.tools,now); hasFunctions=true; }
+  if (Array.isArray(approved.input) && approved.input.some((i: unknown)=>record(i) && ['function_call','function_call_output','reasoning'].includes(String(i.type)))) hasFunctions=true;
+  if (req.tool_choice !== undefined) {
+    if (!hasFunctions) fail('No declared function tools');
+    const choice=req.tool_choice;
+    if (typeof choice === 'string') {
+      if (!['none','auto','required'].includes(choice)) fail('Unknown tool_choice');
+    } else if (record(choice)) {
+      keys(choice,['type','name'],'tool_choice');
+      if (choice.type !== 'function' || !functionName(choice.name) || !(approved.tools as ObjectValue[]).some(t=>t.name===choice.name)) fail('Unapproved tool_choice');
+    } else fail('Invalid tool_choice');
+    approved.tool_choice=choice;
   }
-  const body: JsonObject = {model:raw.model, input:checked.input, max_output_tokens:maxOutput, store:false};
-  if (!chat && raw.instructions !== undefined) body.instructions=raw.instructions;
-  if (tools) body.tools=tools;
-  if (choice !== undefined) body.tool_choice=choice;
-  if (raw.parallel_tool_calls !== undefined) body.parallel_tool_calls=raw.parallel_tool_calls;
-  if (output !== undefined) body.text=output;
-  if (raw.stream !== undefined) body.stream=raw.stream;
-  // These fields are the same between preflight and dispatch. No truncation,
-  // previous_response_id, conversation, remote tool execution or hidden context.
-  const preflight: JsonObject = {model:body.model, input:body.input};
-  for (const key of ['instructions','tools','tool_choice','text']) if (body[key] !== undefined) preflight[key]=body[key];
-  return {body, preflight, group, maxOutput:maxOutput as number, chat, includeUsage};
+  if (req.parallel_tool_calls !== undefined) {
+    if (!hasFunctions || typeof req.parallel_tool_calls !== 'boolean') fail('Invalid parallel_tool_calls');
+    approved.parallel_tool_calls=req.parallel_tool_calls;
+  }
+  const max=approved.max_output_tokens;
+  if (!Number.isSafeInteger(max) || (max as number)<1 || (max as number)>config.policy.maxOutputTokens) fail('Bounded max_output_tokens required');
+  return {body:approved,group,maxOutput:max as number,clientMode:mode,hasFunctions};
 }
