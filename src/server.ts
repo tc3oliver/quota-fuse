@@ -46,7 +46,29 @@ function parseUsage(raw: any, endpoint: string): number | null {
   const u = raw?.usage;
   const input = endpoint === '/v1/responses' ? u?.input_tokens : u?.prompt_tokens;
   const output = endpoint === '/v1/responses' ? u?.output_tokens : u?.completion_tokens;
-  return Number.isSafeInteger(input) && input >= 0 && Number.isSafeInteger(output) && output >= 0 ? input + output : null;
+  return Number.isSafeInteger(input) && input >= 0 && Number.isSafeInteger(output) && output >= 0 &&
+    Number.isSafeInteger(input + output) ? input + output : null;
+}
+/** A provably terminal generation is not necessarily a successful generation.
+ * Only max_output_tokens truncation with an internally consistent, complete
+ * provider usage receipt is safe to settle. No fallback to estimated usage. */
+function incompleteUsage(raw: any, outputCap: number): { total: number; receipt: {
+  responseId: string; reason: 'max_output_tokens'; inputTokens: number; outputTokens: number
+} } | null {
+  if (raw?.status !== 'incomplete' || raw?.incomplete_details?.reason !== 'max_output_tokens' ||
+      (raw.error !== null && raw.error !== undefined) ||
+      typeof raw.id !== 'string' || !/^resp_[a-zA-Z0-9_-]{3,128}$/.test(raw.id) ||
+      typeof raw.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(raw.model)) return null;
+  const u = raw.usage;
+  if (!u || typeof u !== 'object' || Array.isArray(u)) return null;
+  const input = u.input_tokens, output = u.output_tokens, total = u.total_tokens;
+  if (!Number.isSafeInteger(input) || input < 0 || !Number.isSafeInteger(output) || output < 0 ||
+      !Number.isSafeInteger(total) || total !== input + output || output > outputCap) return null;
+  const reasoning = u.output_tokens_details?.reasoning_tokens;
+  const cached = u.input_tokens_details?.cached_tokens;
+  if ((reasoning !== undefined && (!Number.isSafeInteger(reasoning) || reasoning < 0 || reasoning > output)) ||
+      (cached !== undefined && (!Number.isSafeInteger(cached) || cached < 0 || cached > input))) return null;
+  return { total, receipt: {responseId:raw.id,reason:'max_output_tokens',inputTokens:input,outputTokens:output} };
 }
 function secureAuth(value: string | undefined, secret: string): boolean {
   if (!value?.startsWith('Bearer ')) return false;
@@ -162,7 +184,9 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           if (approved.stream === true) {
             if (!upstream.body) throw new Error('No SSE body');
             res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-store', 'X-Request-ID': id, 'X-Accel-Buffering': 'no' });
-            let buffer = '', completedUsage: number | null = null, sawComplete = false, finalResponse: Record<string,unknown> | null = null;
+            let buffer = '', finalUsage: number | null = null, terminal: 'completed' | 'incomplete' | null = null;
+            let incompleteReceipt: ReturnType<typeof incompleteUsage> = null;
+            let finalResponse: Record<string,unknown> | null = null;
             const chatToolIndices = new Map<number,number>();
             const decoder = new TextDecoder();
             for await (const chunk of upstream.body) {
@@ -177,16 +201,26 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
                 const frame = buffer.slice(0, match.index); buffer = buffer.slice(match.index + match[0].length);
                 const event = frame.split(/\r?\n/).find(s => s.startsWith('event:'))?.slice(6).trim();
                 const data = frame.split(/\r?\n/).filter(s => s.startsWith('data:')).map(s => s.slice(5).trimStart()).join('\n');
-                if (event === 'response.completed') {
+                if (event === 'response.completed' || event === 'response.incomplete') {
+                  if (terminal !== null) throw new Error('Conflicting terminal response events');
                   const parsed = JSON.parse(data);
-                  if (parsed.response?.status !== 'completed') throw new Error('Unverified terminal response status');
-                  completedUsage = parseUsage(parsed.response, '/v1/responses'); sawComplete = true;
-                  if (clientMode === 'chat') {
-                    chatResponse(parsed.response);
-                    finalResponse = parsed.response;
+                  if (event === 'response.completed') {
+                    if (parsed.response?.status !== 'completed') throw new Error('Unverified terminal response status');
+                    finalUsage = parseUsage(parsed.response, '/v1/responses');
+                    if (finalUsage === null) throw new Error('Provider missing complete usage');
+                    if (clientMode === 'chat') {
+                      chatResponse(parsed.response);
+                      finalResponse = parsed.response;
+                    }
+                    terminal = 'completed';
+                  } else {
+                    incompleteReceipt = incompleteUsage(parsed.response, maxOutput);
+                    if (!incompleteReceipt) throw new Error('Unverified incomplete response usage');
+                    finalUsage = incompleteReceipt.total;
+                    terminal = 'incomplete';
                   }
                 }
-                if (event === 'response.failed' || event === 'response.incomplete') throw new Error('Incomplete response');
+                if (event === 'response.failed') throw new Error('Failed upstream response');
                 if (clientMode === 'chat') {
                   const delta = chatStreamDelta(event, data && data !== '[DONE]' ? JSON.parse(data) : null, approved.model as string, chatToolIndices);
                   if (delta && !res.write(delta)) await once(res, 'drain');
@@ -194,21 +228,42 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
               }
               if (clientMode === 'responses' && !res.write(chunk)) await once(res, 'drain');
             }
-            if (!sawComplete || completedUsage === null || res.destroyed) throw new Error('Stream missing final usage');
-            ledger.complete(key, completedUsage);
+            if (terminal === null || finalUsage === null || res.destroyed) throw new Error('Stream missing final usage');
+            ledger.complete(key, finalUsage, incompleteReceipt?.receipt);
             finished = true;
-            if (clientMode === 'chat' && finalResponse) res.write(chatStreamEnd(finalResponse));
+            if (clientMode === 'chat') {
+              if (terminal === 'incomplete') {
+                // Chat cannot report a complete tool call/assistant message; do not
+                // emit a fabricated finish_reason=stop or a success [DONE] marker.
+                res.write('event: error\\ndata: '+JSON.stringify({error:{type:'upstream_incomplete',
+                  code:'UPSTREAM_INCOMPLETE',message:'Generation stopped at max_output_tokens; usage was settled.'}})+'\\n\\n');
+              } else if (finalResponse) res.write(chatStreamEnd(finalResponse));
+            }
             res.end();
           } else {
             const text = await readLimited(upstream, 8 * 1024 * 1024);
             const parsed = JSON.parse(text);
-            if (parsed?.status !== 'completed') throw new Error('Upstream response is not completed');
-            const usage = parseUsage(parsed, '/v1/responses');
-            if (usage === null) throw new Error('Provider missing complete usage');
-            const outgoing = clientMode === 'chat' ? chatResponse(parsed) : parsed;
-            ledger.complete(key, usage);
-            finished = true;
-            writeJson(res, 200, outgoing, { 'X-Request-ID': id });
+            if (parsed?.status === 'incomplete') {
+              const incomplete = incompleteUsage(parsed, maxOutput);
+              if (!incomplete) throw new Error('Unverified incomplete response usage');
+              ledger.complete(key, incomplete.total, incomplete.receipt);
+              finished = true;
+              if (clientMode === 'chat') {
+                // The Chat adapter must not claim that truncated generations
+                // completed successfully, even though their tokens are settled.
+                writeJson(res, 503, {error:{type:'upstream_incomplete',code:'UPSTREAM_INCOMPLETE',
+                  message:'Generation stopped at max_output_tokens; usage was settled. Do not replay this idempotency key.'}},
+                  {'X-Request-ID':id,'X-Quota-Guard-Reason':'UPSTREAM_INCOMPLETE'});
+              } else writeJson(res, 200, parsed, {'X-Request-ID':id});
+            } else {
+              if (parsed?.status !== 'completed') throw new Error('Upstream response is not completed');
+              const usage = parseUsage(parsed, '/v1/responses');
+              if (usage === null) throw new Error('Provider missing complete usage');
+              const outgoing = clientMode === 'chat' ? chatResponse(parsed) : parsed;
+              ledger.complete(key, usage);
+              finished = true;
+              writeJson(res, 200, outgoing, { 'X-Request-ID': id });
+            }
           }
         } catch {
           if (!finished) ledger.unknown(key);

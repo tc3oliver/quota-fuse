@@ -136,3 +136,31 @@ npm run typecheck
 ```
 
 Offline integration tests exercise a mock `fetch`, not the official incentive billing system. Real production Go/No-Go includes a documented zero-unexpected-cost comparison of actual Dashboard/Costs and a scoped project key.
+
+## Verifiable incomplete generation usage (new requests only)
+
+An upstream Responses generation ending with `status: incomplete` and
+`incomplete_details.reason: max_output_tokens` can still have final,
+verified token usage. A newly dispatched request settles **accounting only**
+when the terminal response has a valid response ID and model, no upstream
+error, nonnegative integer input/output/total token counts, a consistent
+`total_tokens = input_tokens + output_tokens`, plausible token details,
+output not exceeding the configured cap, and actual total not exceeding the
+persisted reservation. The same rules apply to JSON and streamed
+`response.incomplete` terminal events; streaming is settled only after EOF.
+
+The ledger uses `COMPLETED` to mean **accounting settled**, not that the
+generation produced an answer. An append-only `incomplete_settlements` row
+records upstream response ID, truncation reason and exact usage atomically.
+Responses callers receive the original `incomplete` payload/event.
+Chat compatibility responds with an explicit `UPSTREAM_INCOMPLETE` error
+instead of a false successful assistant turn. Duplicate idempotency keys
+remain forbidden. Missing or contradictory receipts, transport failures,
+unknown terminal causes, client disconnects and bounds violations stay
+fail-closed as before.
+
+**This release does not reconcile prior UNKNOWN requests** such as
+`live-trial-000001`. Do not set `actual`, overwrite UNKNOWN, reset the
+ledger, or use an inferred usage delta as proof. Previously ambiguous
+records continue to require independent evidence and the operator process
+documented above.

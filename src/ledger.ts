@@ -10,6 +10,10 @@ export interface Reservation {
   idempotency_key: string; request_id: string; body_hash: string; model: string;
   group_name: Group; utc_day: string; reserved: number; actual: number | null; state: string;
 }
+/** Persisted proof that an incomplete generation's token accounting is final. */
+export interface IncompleteSettlement {
+  responseId: string; reason: 'max_output_tokens'; inputTokens: number; outputTokens: number
+}
 export class LedgerError extends Error {
   readonly code: string;
   constructor(code: string, message: string) { super(message); this.code = code; }
@@ -35,6 +39,7 @@ export class Ledger {
     if (!columns('reservations').includes('phase')) this.db.exec("ALTER TABLE reservations ADD COLUMN phase TEXT NOT NULL DEFAULT 'DISPATCHED' CHECK(phase IN ('PREFLIGHT','DISPATCHED'))");
     this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/002_reconciliation.sql'), 'utf8'));
     this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/003_dispatched_day_reviews.sql'), 'utf8'));
+    this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/004_incomplete_settlements.sql'), 'utf8'));
     this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA synchronous = FULL;');
     if (options.recoverPending !== false) this.recoverPending();
   }
@@ -318,11 +323,18 @@ export class Ledger {
         .run(key,operator,evidence,'VERIFIED_NO_GENERATION_AND_ZERO_BILLABLE_USAGE',when);
     });
   }
-  complete(key: string, actual: number): void {
+  complete(key: string, actual: number, incomplete?: IncompleteSettlement): void {
     if (!safeInt(actual)) throw new LedgerError('INVALID_USAGE', 'Usage must contain nonnegative integer tokens');
+    if (incomplete && (incomplete.reason !== 'max_output_tokens' ||
+        !/^resp_[a-zA-Z0-9_-]{3,128}$/.test(incomplete.responseId) ||
+        !safeInt(incomplete.inputTokens) || !safeInt(incomplete.outputTokens) ||
+        !Number.isSafeInteger(incomplete.inputTokens + incomplete.outputTokens) ||
+        incomplete.inputTokens + incomplete.outputTokens !== actual))
+      throw new LedgerError('INVALID_USAGE', 'Invalid provider incomplete-settlement evidence');
     this.tx(() => {
       const r = this.find(key);
-      if (!r || r.state !== 'PENDING') throw new LedgerError('INVALID_TRANSITION', 'Cannot settle nonpending reservation');
+      if (!r || r.state !== 'PENDING' || (incomplete && r.phase !== 'DISPATCHED'))
+        throw new LedgerError('INVALID_TRANSITION', 'Cannot settle nonpending or un-dispatched reservation');
       if (actual > r.reserved) {
         this.db.prepare("UPDATE reservations SET state='UNKNOWN',updated_at=? WHERE idempotency_key=?").run(new Date().toISOString(), key);
         // A breached usage bound invalidates further admissions until manual review.
@@ -330,6 +342,12 @@ export class Ledger {
         // Commit UNKNOWN and PAUSED together, then report the failure.
         return;
       }
+      if (incomplete) this.db.prepare(`INSERT INTO incomplete_settlements
+        (idempotency_key,upstream_response_id,reason,input_tokens,output_tokens,total_tokens,observed_at)
+        VALUES(?,?,?,?,?,?,?)`).run(key,incomplete.responseId,incomplete.reason,
+          incomplete.inputTokens,incomplete.outputTokens,actual,new Date().toISOString());
+      // COMPLETED refers to the *accounting* lifecycle, not output quality.
+      // The separate immutable receipt retains the incomplete generation state.
       this.db.prepare("UPDATE reservations SET state='COMPLETED',actual=?,updated_at=? WHERE idempotency_key=?")
         .run(actual, new Date().toISOString(), key);
     });
