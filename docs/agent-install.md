@@ -138,9 +138,11 @@ finish offline tests while the user provides these details, then recheck.
 
 ## Secrets, policy gate, and live startup
 
-- `.env.proxy`: scoped `OPENAI_API_KEY` and generated `QG_PROXY_TOKEN`.
-- `.env.collector`: separate Organization `OPENAI_ADMIN_KEY`.
-- Only check that these keys are **present**. Never ask for secret values in
+- `.env.proxy`: Project-scoped `OPENAI_API_KEY` must be permitted to make the required POST inference/preflight requests. **Do not recommend Read Only** for this key; use the minimum functional Restricted scopes where available. Keep the generated `QG_PROXY_TOKEN` unchanged.
+- `.env.collector`: separate **API Platform Organization** `OPENAI_ADMIN_KEY` is for `GET /v1/organization/usage/completions` only. When available recommend **Read Only**, or `Restricted` with **Organization Usage: Read**; use the UI's actual permission labels rather than inventing them. No write, organization-user, project-management or API-key administration privileges are needed.
+- Admin keys are created at https://platform.openai.com/settings/organization/admin-keys by an API Platform Organization Owner. **Do not confuse this with a ChatGPT Admin Console workspace key.** For permission details see https://help.openai.com/en/articles/9687866 .
+- If those least-privilege controls are missing or the collector gets 401/403, explain the exact blocker. Do **not** suggest choosing `All` blindly or automatically broaden the key; have the owner inspect the supported scopes before proceeding.
+- The Agent must only check that keys are **present**; it cannot infer their actual permissions from the key string. Never ask for secret values in
   chat, reveal them, embed them in logs, commit them or mix the two environments.
 - `inputCounter=reject`, `preflightCostVerified=false` and null expiring
   attestations intentionally block requests on a fresh installation.

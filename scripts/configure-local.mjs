@@ -107,6 +107,14 @@ try{
       continue;
     }
     console.log(stage.label+': '+stage.link);
+    if(stage.name==='OPENAI_ADMIN_KEY'){
+      console.log('  Select API Platform Organization Admin Key (NOT ChatGPT workspace Admin Key).');
+      console.log('  For Collector GET /v1/organization/usage/completions: prefer Read Only or Restricted / Organization Usage: Read, if offered.');
+      console.log('  Do not grant All/write/admin-management permissions just to clear a 403; check supported scopes with your Organization Owner.');
+    }else{
+      console.log('  This Project key must be allowed to POST inference and input-token preflight requests; Read Only will not work.');
+      console.log('  Prefer the narrowest available Restricted request permissions.');
+    }
     const value=await hidden('Paste '+stage.label+' here (hidden; Enter skips): ');
     if(!value){console.log('Skipped.');continue;}
     saveKey(stage.path,stage.name,value);

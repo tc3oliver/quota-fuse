@@ -38,9 +38,22 @@ an agent chat. Existing keys are preserved. It refuses redirected input. If Prox
 Agents must **never** invoke the wizard inside their captured PTY.
 
 
-In `.env.proxy`, fill in `OPENAI_API_KEY` with a **project-scoped** key. Keep the generated `QG_PROXY_TOKEN` unchanged unless rotating it. Do **not** add `OPENAI_ADMIN_KEY` here.
+### Which permissions should the two API keys have?
 
-In `.env.collector`, fill in `OPENAI_ADMIN_KEY` with an organization **Admin API Key**. Do **not** add `OPENAI_API_KEY` here. The collector reads the Organization Usage API and cannot spend generation tokens on behalf of the proxy.
+| Local file | Key and permissions |
+| --- | --- |
+| `.env.proxy` | **Project API Key** (`OPENAI_API_KEY`): allow the necessary inference operations, including `POST /v1/responses` and the `POST /v1/responses/input_tokens` preflight counter (and Chat Completions if used). A **Read Only** Project key cannot perform inference. Prefer `Restricted` with only the required request permissions if available; otherwise review the smallest working scope. |
+| `.env.collector` | **API Platform Organization Admin Key** (`OPENAI_ADMIN_KEY`): only needs to read `GET /v1/organization/usage/completions`. When offered, choose **Read Only**, or **Restricted / Organization Usage: Read** (use the closest actual permission label shown). Do **not** enable write, user-management, project-management or key-management permissions for the collector. |
+
+Create the Project key from [API Platform → Projects](https://platform.openai.com/settings/organization/projects) → your chosen Project → API Keys. Create the separate organization Admin key in [API Platform → Organization Admin Keys](https://platform.openai.com/settings/organization/admin-keys); only an API Platform Organization Owner can create it. **A ChatGPT Admin Console / workspace Admin key is a different product and will not work here.**
+
+The Admin-key permission choices can differ from ordinary Project-key dialogs. If the API Platform does not offer a clear read-only or Usage-read scope, **do not assume that `All` is required or select it automatically**: stop and ask the organization owner to verify the minimum supported scope. If the Collector receives 401/403, check its API Platform Organization and the required Usage-read permission before broadening access. Never auto-upgrade or re-create a key with All permissions to clear a `PAUSED` state.
+
+In `.env.proxy`, fill in `OPENAI_API_KEY` and keep the generated `QG_PROXY_TOKEN` unchanged unless rotating it. Do **not** add `OPENAI_ADMIN_KEY` here.
+
+In `.env.collector`, fill in the separate organization `OPENAI_ADMIN_KEY`. Do **not** add `OPENAI_API_KEY` here. The Collector only makes read-only Organization Usage requests.
+
+OpenAI reference: [API Platform Admin key permissions](https://help.openai.com/en/articles/9687866) and [Project key permissions](https://help.openai.com/en/articles/8867743-assign-api-key-permissions).
 
 These are separate processes with different environment variables, but local files under the same OS user are **not an isolation boundary against a compromised user account**. Protect shell history and backups accordingly. Restrict project key permissions and revoke compromised credentials at OpenAI.
 
