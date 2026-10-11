@@ -29,7 +29,7 @@ QuotaFuse is an OpenAI-compatible reverse proxy that **refuses uncertain or pote
 
 ### Deliberate implementation difference
 
-The supplied initial spec suggested Fastify; this first implementation uses the **Node.js 22 native HTTP API** instead, with TypeScript's built-in type stripping and `node:sqlite`. No production runtime npm dependencies are required, and unit/integration tests run without network access. A subsequent release may adopt Fastify after the same security checks are reproduced. The `node:sqlite` API is still experimental on Node 22; pin/test your runtime. The runtime config is strict **JSON** (`config.example.json`); `config.example.yml` is for spec reference only.
+The supplied initial spec suggested Fastify; this first implementation uses the **Node.js 22 native HTTP API** instead, with TypeScript's built-in type stripping and `node:sqlite`. No production runtime npm dependencies are required, and unit/integration tests run without network access. A subsequent release may adopt Fastify after the same security checks are reproduced. The `node:sqlite` API is still experimental on Node 22; pin/test your runtime. The runtime config is strict **JSON** (`config.example.json`); no YAML runtime example is shipped.
 
 ## Quick start (safe default)
 
