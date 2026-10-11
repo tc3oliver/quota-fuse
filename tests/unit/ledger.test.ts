@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -35,7 +36,7 @@ test('settlement releases excess reservation only with complete usage',()=> {
 });
 test('actual usage above reservation keeps unknown allocation',()=> {
   const l=verifiedLedger(),c=cfg();reserve(l,c,100,'bad');
-  assert.throws(()=>l.complete('bad',101));assert.equal(l.find('bad')?.state,'UNKNOWN');l.close();
+  assert.throws(()=>l.complete('bad',101));assert.equal(l.find('bad')?.state,'UNKNOWN');assert.equal(l.isPaused(),true);l.close();
 });
 test('uncertain upstream outcomes never release reserves',()=> {
   const l=verifiedLedger(),c=cfg();reserve(l,c,100,'unknown');l.unknown('unknown');
@@ -46,7 +47,7 @@ test('duplicate idempotency key denies replay including completed',()=> {
   assert.throws(()=>reserve(l,c,100,'same'),(e:any)=>e.code==='DUPLICATE_REQUEST');l.close();
 });
 test('watermark regression is rejected, remaining unchanged',()=> {
-  const l=verifiedLedger(),c=cfg();l.recordObservation(day,'premium',1000);
+  const l=new Ledger(':memory:'),c=cfg();l.recordObservation(day,'premium',1000);
   assert.throws(()=>l.recordObservation(day,'premium',999),(e:any)=>e.code==='OFFICIAL_WATERMARK_REGRESSION');
   assert.equal(l.snapshot(c,day,'premium').official_observed,1000);l.close();
 });
@@ -96,4 +97,103 @@ test('previous-day PENDING blocks new-day admission, not just UNKNOWN',()=> {
   l.admit(c,{key:'unsettled-old',hash:'x',requestId:'old',model:c.quotas.premium.models[0],group:'premium',day:oldDay,reserve:100,now:new Date('2026-01-01T10:00:00Z')});
   assert.throws(()=>reserve(l,c,100,'new-day'),(e:any)=>e.code==='FREE_QUOTA_UNVERIFIED');
   l.close();
+});
+
+test('official baseline plus local settled is not hidden by later stale official observation',()=> {
+  const l=new Ledger(':memory:'),c=cfg();
+  l.recordObservation(day,'premium',700000);
+  l.recordObservation(day,'economy',0);l.setPause(null);
+  reserve(l,c,100000,'post-baseline');
+  l.prepareDispatch(c,'post-baseline',98240,1744);
+  l.complete('post-baseline',100000);
+  assert.equal(l.snapshot(c,day,'premium').baseline_observed,700000);
+  assert.equal(l.snapshot(c,day,'premium').estimated_remaining,50000);
+  assert.throws(()=>reserve(l,c,50001,'would-charge'),(e:any)=>e.code==='FREE_QUOTA_EXHAUSTED');
+  // Later official aggregate contains those tokens; must not double count.
+  l.recordObservation(day,'premium',800000);
+  assert.equal(l.snapshot(c,day,'premium').estimated_remaining,50000);
+  l.close();
+});
+
+test('cannot establish a late baseline after any local admitted request',()=> {
+  const l=verifiedLedger(),c=cfg();
+  const tomorrow='2026-12-31';
+  // Existing verified baseline is not reset even if a new official value arrives.
+  reserve(l,c,100,'one');
+  l.recordObservation(day,'premium',50);
+  assert.equal(l.observation(day,'premium')?.anchor_tokens,0);
+  // Simulate a missing-first-observation for an already admitted group on another day.
+  l.db.prepare('INSERT INTO reservations(idempotency_key,request_id,body_hash,model,group_name,utc_day,reserved,actual,state,admitted_at,updated_at,phase) VALUES(?,?,?,?,?,?,?,NULL,?,?,?,?)')
+    .run('old','old','old',c.quotas.premium.models[0],'premium',tomorrow,100,'UNKNOWN',new Date().toISOString(),new Date().toISOString(),'DISPATCHED');
+  assert.throws(()=>l.recordObservation(tomorrow,'premium',1),(e:any)=>e.code==='ANCHOR_UNVERIFIED');
+  l.close();
+});
+
+test('preflight provisional capacity shrinks atomically and never reenables dispatch',()=> {
+  const l=verifiedLedger(),c=cfg();
+  reserve(l,c,80000,'counter-phase');
+  assert.equal(l.find('counter-phase')?.phase,'PREFLIGHT');
+  l.prepareDispatch(c,'counter-phase',100,400);
+  assert.equal(l.find('counter-phase')?.phase,'DISPATCHED');
+  assert.equal(l.find('counter-phase')?.reserved,500+c.policy.accountMargin);
+  assert.throws(()=>l.prepareDispatch(c,'counter-phase',100,400),(e:any)=>e.code==='INVALID_TRANSITION');
+  l.unknown('counter-phase');
+  assert.throws(()=>l.reconcilePreflight('counter-phase','operator','review-ticket-000123456789'),(e:any)=>e.code==='PAUSE_REQUIRED');
+  l.setPause('MANUAL_REVIEW');
+  assert.throws(()=>l.reconcilePreflight('counter-phase','operator','review-ticket-000123456789'),(e:any)=>e.code==='INVALID_TRANSITION');
+  l.close();
+});
+
+test('audited preflight-only manual reconciliation retains deduplication and audit evidence',()=> {
+  const l=verifiedLedger(),c=cfg();
+  reserve(l,c,10000,'preflight-unknown');l.unknown('preflight-unknown');
+  l.setPause('MANUAL_REVIEW');
+  assert.throws(()=>l.reconcilePreflight('preflight-unknown','operator','short'),(e:any)=>e.code==='INVALID_EVIDENCE');
+  l.reconcilePreflight('preflight-unknown','operator','costs-verified-ticket-000123456789');
+  assert.equal(l.find('preflight-unknown')?.state,'RECONCILED');
+  assert.equal(l.find('preflight-unknown')?.actual,0);
+  assert.equal((l.db.prepare('SELECT COUNT(*) AS n FROM reconciliation_audit').get() as any).n,1);
+  l.setPause(null);
+  assert.throws(()=>reserve(l,c,100,'preflight-unknown'),(e:any)=>e.code==='DUPLICATE_REQUEST');
+  l.close();
+});
+
+test('legacy observation without verified baseline fails closed after schema migration',()=> {
+  const dir=mkdtempSync(join(tmpdir(),'qf-migrate-'));
+  const path=join(dir,'legacy.sqlite');
+  try {
+    const l=new Ledger(path);l.recordObservation(day,'premium',700000);l.close();
+    const raw=new DatabaseSync(path);
+    raw.exec('UPDATE observations SET anchor_tokens=NULL WHERE utc_day=\''+day+'\'');raw.close();
+    const migrated=new Ledger(path);
+    assert.equal(migrated.snapshot(cfg(),day,'premium').confidence,'UNVERIFIED');
+    assert.throws(()=>migrated.recordObservation(day,'premium',700001),(e:any)=>e.code==='ANCHOR_UNVERIFIED');
+    migrated.close();
+  }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('read-only quota access never migrates, recovers, or modifies pending reservations',()=> {
+  const dir=mkdtempSync(join(tmpdir(),'qf-readonly-'));
+  const path=join(dir,'guard.sqlite');
+  try {
+    const l=new Ledger(path),c=cfg();l.assertPolicy(c);
+    l.recordObservation(day,'premium',0);l.recordObservation(day,'economy',0);l.setPause(null);
+    reserve(l,c,1000,'inflight');l.close();
+    const reader=new Ledger(path,{readOnly:true});
+    reader.verifyPolicy(c);
+    assert.equal(reader.find('inflight')?.state,'PENDING');
+    assert.equal(reader.snapshot(c,day,'premium').admitted_reserved,1000);
+    assert.throws(()=>reader.setPause('WRITE_FORBIDDEN'));
+    reader.close();
+    const verify=new Ledger(path,{recoverPending:false});
+    assert.equal(verify.find('inflight')?.state,'PENDING');verify.close();
+  }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('unexpected official usage beyond baseline plus local upper bound is rejected',()=>{
+ const l=verifiedLedger(),c=cfg();
+ reserve(l,c,100,'only-local-traffic');
+ assert.throws(()=>l.recordObservation(day,'premium',101),(e:any)=>e.code==='UNACCOUNTED_OFFICIAL_USAGE');
+ assert.equal(l.observation(day,'premium')?.official_high_watermark,0);
+ l.close();
 });

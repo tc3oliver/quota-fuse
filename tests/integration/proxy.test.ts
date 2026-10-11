@@ -13,8 +13,8 @@ function fake(opts:{missingUsage?:boolean;stream?:boolean;error?:boolean}={}, se
     seen.push(String(url));
     if(opts.error) throw new Error('network error');
     if(String(url).endsWith('/responses/input_tokens')) return new Response(JSON.stringify({object:'response.input_tokens',input_tokens:11}),{status:200});
-    if(opts.stream) return new Response('event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: {"response":{"usage":{"input_tokens":11,"output_tokens":7}}}\n\n', {status:200,headers:{'Content-Type':'text/event-stream'}});
-    return new Response(JSON.stringify(opts.missingUsage?{id:'resp'}:{id:'resp',usage:{input_tokens:11,output_tokens:7}}),{status:200});
+    if(opts.stream) return new Response('event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: {"response":{"status":"completed","usage":{"input_tokens":11,"output_tokens":7}}}\n\n', {status:200,headers:{'Content-Type':'text/event-stream'}});
+    return new Response(JSON.stringify(opts.missingUsage?{id:'resp'}:{id:'resp',status:'completed',usage:{input_tokens:11,output_tokens:7}}),{status:200});
   }) as typeof fetch;
 }
 async function harness(fn:typeof fetch = fake()) {
@@ -40,6 +40,7 @@ test('JSON requests settle and forward only server credentials',async()=>{
     const res=await post(h.base);assert.equal(res.status,200);assert.equal((await res.json()).id,'resp');
     assert.equal(h.l.find('unique-request-123')?.actual,18);
     assert.equal(h.l.find('unique-request-123')?.state,'COMPLETED');
+    assert.equal(h.l.find('unique-request-123')?.phase,'DISPATCHED');
     assert.equal(seen.length,2);
   } finally {await h.close();}
 });
@@ -80,7 +81,7 @@ test('unknown outcome retains reservation, provider cannot retry',async()=>{
   const seen:string[]=[],h=await harness(fake({error:true},seen));
   try {
     const r=await post(h.base);assert.equal(r.status,503);
-    assert.equal(h.l.find('unique-request-123')?.state,'UNKNOWN');assert.ok(h.l.find('unique-request-123')!.reserved>0);
+    assert.equal(h.l.find('unique-request-123')?.state,'UNKNOWN');assert.equal(h.l.find('unique-request-123')?.phase,'PREFLIGHT');assert.ok(h.l.find('unique-request-123')!.reserved>0);
     assert.equal((await post(h.base)).status,409);assert.equal(seen.length,1);
   }finally{await h.close();}
 });
@@ -97,7 +98,10 @@ test('SSE forwards raw events and settles on completed usage',async()=>{
 });
 test('reserve before preflight: quota too low means zero upstream calls',async()=>{
   const seen:string[]=[],h=await harness(fake({},seen));
-  try {h.l.recordObservation(new Date().toISOString().slice(0,10),'premium',849990);
+  try {
+    const c=cfg();
+    h.l.admit(c,{key:'previous-local-work',hash:'previous',requestId:'previous',model:payload.model,group:'premium',day:new Date().toISOString().slice(0,10),reserve:849990});
+    h.l.complete('previous-local-work',849990);
     const r=await post(h.base);assert.equal(r.status,429);assert.equal(seen.length,0);
   }finally{await h.close();}
 });
@@ -122,7 +126,7 @@ test('quota uses conservative terminology and has zero remaining if not attested
 test('SSE CRLF framing is correctly parsed and settled',async()=>{
   const f=(async (url:any, init:any)=>String(url).endsWith('/input_tokens')
     ?new Response(JSON.stringify({object:'response.input_tokens',input_tokens:11}))
-    :new Response('event: response.completed\r\ndata: {"response":{"usage":{"input_tokens":11,"output_tokens":4}}}\r\n\r\n',{status:200})) as typeof fetch;
+    :new Response('event: response.completed\r\ndata: {"response":{"status":"completed","usage":{"input_tokens":11,"output_tokens":4}}}\r\n\r\n',{status:200})) as typeof fetch;
   const h=await harness(f);
   try {const r=await post(h.base,{...payload,stream:true});assert.equal(r.status,200);await r.text();
     assert.equal(h.l.find('unique-request-123')?.actual,15);
@@ -177,4 +181,39 @@ test('oversized unframed SSE is aborted and reservation stays UNKNOWN',async()=>
     });
     assert.equal(h.l.find('unique-request-123')?.state,'UNKNOWN');
   }finally{await h.close();}
+});
+
+test('expired attestation during preflight prevents generation dispatch',async()=>{
+ const c=cfg(),l=verifiedLedger(),seen:string[]=[];
+ let t=Date.now();
+ c.policy.eligibilityAttestedUntil=new Date(t+1000).toISOString();
+ const now=()=>new Date(t);
+ const upstream=(async(url:any)=>{
+  seen.push(String(url));
+  if(String(url).endsWith('/responses/input_tokens')) {t+=2000;return new Response(JSON.stringify({object:'response.input_tokens',input_tokens:11}));}
+  throw new Error('generation must not dispatch');
+ }) as typeof fetch;
+ const s=makeServer(c,l,{fetchImpl:upstream,now});s.listen(0,'127.0.0.1');await once(s,'listening');
+ const addr=s.address() as any;
+ try{
+  assert.equal((await post(`http://127.0.0.1:${addr.port}`)).status,503);
+  assert.equal(seen.length,1);
+  assert.equal(l.find('unique-request-123')?.state,'UNKNOWN');
+  assert.equal(l.find('unique-request-123')?.phase,'PREFLIGHT');
+ }finally{await new Promise<void>(resolve=>s.close(()=>{l.close();resolve();}));}
+});
+test('non-completed JSON response with usage must stay UNKNOWN',async()=>{
+ const seen:string[]=[];
+ const upstream=(async(url:any)=>{
+  seen.push(String(url));
+  if(String(url).endsWith('/responses/input_tokens'))return new Response(JSON.stringify({object:'response.input_tokens',input_tokens:11}));
+  return new Response(JSON.stringify({status:'incomplete',usage:{input_tokens:11,output_tokens:7}}));
+ }) as typeof fetch;
+ const h=await harness(upstream);
+ try {
+  assert.equal((await post(h.base)).status,503);
+  assert.equal(seen.length,2);
+  assert.equal(h.l.find('unique-request-123')?.state,'UNKNOWN');
+  assert.equal(h.l.find('unique-request-123')?.phase,'DISPATCHED');
+ }finally{await h.close();}
 });

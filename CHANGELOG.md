@@ -1,3 +1,11 @@
+## Unreleased
+
+- Review hardening: reject unexplained official token overages, preserve a sticky pause on usage-bound violations, recheck attestation after preflight, and require completed response status before settlement.
+
+- Keep the first daily Admin Usage observation as a guarded baseline and count post-baseline local usage without double counting; unknown legacy anchors remain paused.
+- Split preflight-only versus dispatched reservation phases, atomically shrink trusted provisional reservations and add audited, offline, preflight-only reconciliation.
+- Make quota CLI genuinely read-only; document Admin Usage limitations, real-billing validation and upgrade recovery.
+
 # Changelog
 
 ## 0.1.1 — 2026-10-11

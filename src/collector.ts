@@ -1,10 +1,13 @@
 import type { Config, Group } from './config.ts';
 import { utcDay } from './config.ts';
-import { Ledger } from './ledger.ts';
+import { Ledger, LedgerError } from './ledger.ts';
 
 export interface CollectOptions { fetchImpl?: typeof fetch; now?: Date; adminKey?: string }
 function whole(v: unknown): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0; }
+const reviewRequired = new Set(['ACTUAL_EXCEEDS_RESERVED', 'UNACCOUNTED_OFFICIAL_USAGE', 'OFFICIAL_WATERMARK_REGRESSION', 'ANCHOR_UNVERIFIED']);
 export async function collectOnce(config: Config, ledger: Ledger, options: CollectOptions = {}): Promise<Record<Group,number>> {
+  // Successful polling must never erase an accounting-invariant failure.
+  if (reviewRequired.has(ledger.pauseReason() ?? '')) throw new Error('Manual operator review required before collector may resume');
   ledger.setPause('COLLECTOR_REFRESHING');
   try {
     const key = options.adminKey ?? process.env.OPENAI_ADMIN_KEY;
@@ -19,6 +22,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
     const fetchImpl = options.fetchImpl ?? fetch;
     let cursor: string | null = null;
     const visited = new Set<string>();
+    let sawBucket = false;
     for (let index = 0; index < 100; index++) {
       const u = new URL(config.upstream.baseUrl + '/organization/usage/completions');
       u.searchParams.set('start_time', String(today));
@@ -33,7 +37,8 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
       const json: any = await resp.json();
       if (json?.object !== 'page' || !Array.isArray(json.data) || typeof json.has_more !== 'boolean') throw new Error('Incomplete usage API response');
       for (const bucket of json.data) {
-        if (!whole(bucket.start_time) || bucket.start_time !== today || !Array.isArray(bucket.results)) throw new Error('Invalid usage day bucket');
+        if (bucket?.object !== 'bucket' || !whole(bucket.start_time) || bucket.start_time !== today || !whole(bucket.end_time) || bucket.end_time <= today || !Array.isArray(bucket.results)) throw new Error('Invalid usage day bucket');
+        sawBucket = true;
         for (const row of bucket.results) {
           // Unknown/other project usage may consume the same organization-level incentive: pause.
           if (!row || row.project_id !== config.upstream.projectId || typeof row.model !== 'string') throw new Error('Unattributed or side-channel usage detected');
@@ -45,6 +50,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
         }
       }
       if (!json.has_more) {
+        if (!sawBucket) throw new Error('Missing official day bucket (cannot assume zero usage)');
         for (const group of ['premium','economy'] as const) ledger.recordObservation(day, group, sums[group], now);
         ledger.setPause(null);
         return sums;
@@ -56,7 +62,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
     throw new Error('Pagination safety cap reached');
   } catch (e) {
     // Set/preserve paused state even for mid-pagination or authentication failures.
-    try { ledger.setPause('COLLECTOR_UNVERIFIED'); } catch { /* DB failures already fail closed */ }
+    try { ledger.setPause(e instanceof LedgerError && reviewRequired.has(e.code) ? e.code : 'COLLECTOR_UNVERIFIED'); } catch { /* DB failures already fail closed */ }
     throw e;
   }
 }
