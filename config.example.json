@@ -1,18 +1,40 @@
 {
-  "server": { "host": "127.0.0.1", "port": 8787, "storage": "./data/quota-guard.sqlite", "maxRequestBytes": 2097152, "maxConcurrentRequests": 4 },
-  "upstream": { "baseUrl": "https://api.openai.com/v1" },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "storage": "./data/quota-guard.sqlite",
+    "maxRequestBytes": 2097152,
+    "maxConcurrentRequests": 4
+  },
+  "upstream": {
+    "baseUrl": "https://api.openai.com/v1"
+  },
   "dataSharing": {
     "projectId": "proj_REPLACE_WITH_DEDICATED_PROJECT_ID",
     "tier": "build"
   },
   "policy": {
-    "mode": "FREE_ONLY", "safetyPct": 85, "maxOutputTokens": 4096, "accountMargin": 256,
-    "inputCounter": "reject", "preflightCostVerified": false,
-    "eligibilityAttestedUntil": null, "exclusiveOrgTrafficAttestedUntil": null,
-    "manualCostsAuditedUntil": null, "reconcileMaxAgeSeconds": 600
+    "mode": "FREE_ONLY",
+    "safetyPct": 85,
+    "maxOutputTokens": 4096,
+    "accountMargin": 256,
+    "inputCounter": "reject",
+    "preflightCostVerified": false,
+    "eligibilityAttestedUntil": null,
+    "exclusiveOrgTrafficAttestedUntil": null,
+    "manualCostsAuditedUntil": null,
+    "reconcileMaxAgeSeconds": 600,
+    "localFunctionBillingVerifiedUntil": null,
+    "structuredTextBillingVerifiedUntil": null
   },
   "quotas": {
-    "premium": { "dailyTokens": 250000, "models": [] },
-    "economy": { "dailyTokens": 2500000, "models": [] }
+    "premium": {
+      "dailyTokens": 250000,
+      "models": []
+    },
+    "economy": {
+      "dailyTokens": 2500000,
+      "models": []
+    }
   }
 }

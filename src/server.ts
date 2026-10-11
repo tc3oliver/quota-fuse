@@ -3,7 +3,8 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { utcDay, type Config } from './config.ts';
 import { Ledger, LedgerError } from './ledger.ts';
-import { Denial, classify, gate, validateRequest } from './policy.ts';
+import { Denial, gate, validateRequest } from './policy.ts';
+import { toChatCompletion, ChatStreamAdapter } from './compat.ts';
 
 const statusCode = (e: unknown) => e instanceof LedgerError ? (
   e.code === 'FREE_QUOTA_EXHAUSTED' ? 429 : e.code === 'DUPLICATE_REQUEST' || e.code === 'IDEMPOTENCY_CONFLICT' ? 409 : 503
@@ -98,10 +99,11 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
         const raw = await readBody(req, config.server.maxRequestBytes);
         let body: unknown;
         try { body = JSON.parse(raw.toString('utf8')); } catch { throw new Denial(400, 'BAD_JSON', 'Invalid JSON'); }
-        const { body: approved, group, maxOutput } = validateRequest(config, path, body);
+        const { body: approved, preflight, group, maxOutput, chat, includeUsage } = validateRequest(config, path, body);
         const hash = createHash('sha256').update(raw).digest('hex');
-        const inputBytes = Buffer.byteLength(approved.input as string) + Buffer.byteLength((approved.instructions as string | undefined) ?? '');
-        // Preflight reservation is intentionally pessimistic. NOT used as the final trusted input count.
+        const inputBytes = Buffer.byteLength(JSON.stringify(preflight));
+        // Conservative bound covers the serialized history, tool schema and format;
+        // it is NOT a tokenizer, and the independent upstream count must fit within it.
         const provisionalInput = inputBytes * 8 + 4096;
         const provisional = provisionalInput + maxOutput + config.policy.accountMargin;
         if (!Number.isSafeInteger(provisional) || provisional <= 0) throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', 'Cannot reserve input bound', group);
@@ -128,7 +130,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           // of its own incentive/billing status. Admission has already been reserved.
           const counter = await fetchImpl(config.upstream.baseUrl + '/responses/input_tokens', {
             method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(30000), disconnect.signal]),
-            body: JSON.stringify({ model: approved.model, input: approved.input, ...(approved.instructions ? { instructions: approved.instructions } : {}) })
+            body: JSON.stringify(preflight)
           });
           if (!counter.ok) throw new Error('Preflight counter unavailable');
           const counted = JSON.parse(await readLimited(counter, 65536));
@@ -143,7 +145,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           gate(config, ledger, nowFn());
           ledger.prepareDispatch(config, key, inputTokens, maxOutput, nowFn());
           // Reusing only the server-provided approved values, never client auth headers.
-          const upstream = await fetchImpl(config.upstream.baseUrl + path.slice(3), {
+          const upstream = await fetchImpl(config.upstream.baseUrl + '/responses', {
             method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(120000), disconnect.signal]),
             body: JSON.stringify(approved)
           });
@@ -152,6 +154,8 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
             if (!upstream.body) throw new Error('No SSE body');
             res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-store', 'X-Request-ID': id, 'X-Accel-Buffering': 'no' });
             let buffer = '', completedUsage: number | null = null, sawComplete = false;
+            let finalResponse: Record<string,any> | null = null;
+            const chatAdapter = chat ? new ChatStreamAdapter(approved.model as string) : null;
             const decoder = new TextDecoder();
             for await (const chunk of upstream.body) {
               if (res.destroyed) throw new Error('Client disconnected');
@@ -168,25 +172,33 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
                 if (event === 'response.completed') {
                   const parsed = JSON.parse(data);
                   if (parsed.response?.status !== 'completed') throw new Error('Unverified terminal response status');
-                  completedUsage = parseUsage(parsed.response, path); sawComplete = true;
+                  completedUsage = parseUsage(parsed.response, '/v1/responses'); sawComplete = true;
+                  finalResponse = parsed.response;
                 }
                 if (event === 'response.failed' || event === 'response.incomplete') throw new Error('Incomplete response');
+                if (chatAdapter && event !== 'response.completed' && data) {
+                  const transformed = chatAdapter.event(event, JSON.parse(data));
+                  if (transformed && !res.write(transformed)) await once(res,'drain');
+                }
               }
-              if (!res.write(chunk)) await once(res, 'drain');
+              if (!chatAdapter && !res.write(chunk)) await once(res, 'drain');
             }
-            if (!sawComplete || completedUsage === null || res.destroyed) throw new Error('Stream missing final usage');
+            if (!sawComplete || completedUsage === null || res.destroyed || !finalResponse) throw new Error('Stream missing final usage');
+            const chatFinal = chatAdapter ? chatAdapter.finish(finalResponse, includeUsage) : '';
             ledger.complete(key, completedUsage);
             finished = true;
+            if (chatAdapter) res.write(chatFinal);
             res.end();
           } else {
             const text = await readLimited(upstream, 8 * 1024 * 1024);
             const parsed = JSON.parse(text);
             if (parsed?.status !== 'completed') throw new Error('Upstream response is not completed');
-            const usage = parseUsage(parsed, path);
+            const usage = parseUsage(parsed, '/v1/responses');
             if (usage === null) throw new Error('Provider missing complete usage');
+            const response = chat ? toChatCompletion(parsed) : parsed;
             ledger.complete(key, usage);
             finished = true;
-            writeJson(res, 200, parsed, { 'X-Request-ID': id });
+            writeJson(res, 200, response, { 'X-Request-ID': id });
           }
         } catch {
           if (!finished) ledger.unknown(key);

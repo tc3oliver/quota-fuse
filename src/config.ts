@@ -19,6 +19,9 @@ export interface Config {
     inputCounter: 'reject' | 'responses_preflight'; preflightCostVerified: boolean;
     eligibilityAttestedUntil: string | null; exclusiveOrgTrafficAttestedUntil: string | null;
     manualCostsAuditedUntil: string | null; reconcileMaxAgeSeconds: number;
+    /** Separate opt-in gates; neither is implied by normal Data Sharing enrollment. */
+    localFunctionBillingVerifiedUntil?: string | null;
+    structuredTextBillingVerifiedUntil?: string | null;
   };
   quotas: Record<Group, { dailyTokens: number; models: string[] }>;
 }
@@ -53,9 +56,9 @@ export function validateConfig(c: Config): Config {
       seen.add(model);
     }
   }
-  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil'] as const) {
+  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil', 'localFunctionBillingVerifiedUntil', 'structuredTextBillingVerifiedUntil'] as const) {
     const val = c.policy[prop];
-    if (val !== null && (typeof val !== 'string' || !Number.isFinite(Date.parse(val)))) throw new Error('Invalid attestation timestamp: ' + prop);
+    if (val !== undefined && val !== null && (typeof val !== 'string' || !Number.isFinite(Date.parse(val)))) throw new Error('Invalid attestation timestamp: ' + prop);
   }
   return c;
 }
