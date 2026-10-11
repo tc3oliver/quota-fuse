@@ -18,10 +18,17 @@ cd quota-fuse
 npm ci
 npm run onboard   # offline, no questions, no OpenAI requests
 npm run doctor    # read-only checklist
+# Run this yourself in a separate local terminal when keys/project are missing:
+# npm run configure:local   # private, hidden API Key entry; no agent tool
 ```
 
 `onboard` prepares missing Git-ignored `config.json`, `.env.proxy` and
 `.env.collector` without overwriting existing user files or SQLite history.
+`configure:local` guides the owner through missing Project and API keys in a
+**separate local terminal** with non-echoed secrets, never in an agent session.
+If a service was started during setup, stop Proxy and Collector before
+changing the Project or tier; pristine paused ledgers can be configured
+without deleting their SQLite database.
 It leaves real API requests **PAUSED** until remaining evidence-backed
 safety gates are satisfied.
 

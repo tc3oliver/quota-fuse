@@ -31,6 +31,13 @@ Use `npm run onboard -- --project=proj_YOUR_EXISTING_ID --tier=launch` to set no
 
 ## 3. Configure separate API keys
 
+For a simpler setup, the **user** can open an independent local Terminal and
+run `npm run configure:local`. This single wizard guides missing Project ID,
+optional org tier and both API Keys; the keys are not echoed or copied into
+an agent chat. Existing keys are preserved. It refuses redirected input. If Proxy or Collector was previously started with a placeholder Project, stop both before configuring: an empty PAUSED ledger can be rebound safely; any ledger with history requires operator review.
+Agents must **never** invoke the wizard inside their captured PTY.
+
+
 In `.env.proxy`, fill in `OPENAI_API_KEY` with a **project-scoped** key. Keep the generated `QG_PROXY_TOKEN` unchanged unless rotating it. Do **not** add `OPENAI_ADMIN_KEY` here.
 
 In `.env.collector`, fill in `OPENAI_ADMIN_KEY` with an organization **Admin API Key**. Do **not** add `OPENAI_API_KEY` here. The collector reads the Organization Usage API and cannot spend generation tokens on behalf of the proxy.

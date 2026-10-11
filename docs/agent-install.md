@@ -25,9 +25,14 @@ asking a long questionnaire; do not stop at a plan.
    configuration files and prints a concise checklist; `doctor` is read-only.
 3. Do **not** ask users to compile or paste eligible model lists. The
    default has no model whitelist, with the important billing warning below.
-4. Only ask for missing **non-secret** decisions when actually needed:
-   existing Project ID and **actual organization tier**. Guide the user to
-   edit required credentials **locally**, not in the agent conversation.
+4. Complete all offline checks without waiting for credentials. If a
+   Project or API key is missing, tell the user to open their **own local
+   Terminal** (outside the agent tool / session recording) and run
+   `npm run configure:local`. This one terminal wizard collects an existing
+   routing Project, optional confirmed tier, and any missing keys with
+   **no terminal echo**. Do not request the key values in chat, run the wizard
+   yourself through a PTY, or capture the user's terminal input.
+   After the user returns, run `npm run doctor` and continue automatically.
 5. Do not create an automatic startup service, enable live inference,
    approve billing attestations or execute even a small real OpenAI API
    request without specific user approval. Offline setup can continue without
@@ -110,6 +115,27 @@ inventing model names. OpenCode still needs a **specific model ID** in its
 provider configuration. The installed client must confirm availability,
 eligibility and protocol support for that model before live traffic.
 
+## One-command private local configuration
+
+```bash
+# The USER runs this in a separate local Terminal, never through an agent tool:
+npm run configure:local
+```
+
+If the Agent previously started Proxy/Collector while the Project ID was
+still a placeholder, **stop both services first**. Onboarding can safely
+rebind a **pristine, paused** SQLite ledger with zero reservations, zero
+official observations and zero audit entries; it never deletes data or
+rewrites a ledger with usage history. A running lock or nonempty ledger
+continues to block policy changes. Never remove lock files by hand.
+
+The wizard does **not** call OpenAI, print keys, or mark billing checks verified.
+It skips already configured keys, preserves permissions, and only needs a
+routing Project ID when missing. The Project ID is an ordinary configuration
+value; the two API Keys are secrets. If a local TTY is unavailable, the
+wizard refuses to accept redirected/piped credentials. An agent should
+finish offline tests while the user provides these details, then recheck.
+
 ## Secrets, policy gate, and live startup
 
 - `.env.proxy`: scoped `OPENAI_API_KEY` and generated `QG_PROXY_TOKEN`.
@@ -146,8 +172,9 @@ For OpenCode, follow [opencode-agent.md](opencode-agent.md). Use a
 **disposable public-data fixture** with an explicit public-data header.
 Never globally attest that private/company code is public. Use
 `npm run test:agent` for zero-upstream-cost mock testing. A real OpenAI
-trial can incur charges, so obtain explicit user approval first. Ask
-permission before installing launchd/systemd automatic startup.
+trial can incur charges, so obtain explicit user approval first. Ask permission before installing launchd/systemd automatic startup. Launchd
+is a **post-setup option**: never treat approval as a prerequisite for Proxy
+or Collector readiness.
 
 ## Final report (no vague remaining-work list)
 

@@ -7,6 +7,8 @@ import { readFileSync, writeFileSync, renameSync, unlinkSync, existsSync, chmodS
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateConfig, DATA_SHARING_LIMITS, unrestrictedModels } from '../src/config.ts';
+import { Ledger } from '../src/ledger.ts';
+import { acquireInstanceLock } from '../src/instance-lock.ts';
 
 const MODEL_DOC = 'https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai';
 const PROJECTS = 'https://platform.openai.com/settings/organization/projects';
@@ -99,9 +101,33 @@ try {
       }
     }
     if (modified) {
-      if (next.server.storage !== ':memory:' && existsSync(resolve(next.server.storage)))
-        throw new Error('Existing SQLite ledger detected. Policy changes require operator reconciliation (docs/runbook.md). No files modified.');
-      saveConfig(next, file);
+      const db=next.server.storage;
+      if (db !== ':memory:' && existsSync(resolve(db))) {
+        // Bootstrapping a PAUSED empty ledger is safe; usage-bearing ledgers
+        // still fail closed. Neither running service may hold an instance lock.
+        const release=[];
+        let ledger;
+        try {
+          release.push(acquireInstanceLock(db,'proxy'));
+          release.push(acquireInstanceLock(db,'collector'));
+          ledger=new Ledger(db,{recoverPending:false});
+          ledger.rebindPristinePolicy(next);
+          try { saveConfig(next,file); }
+          catch(e) {
+            // Retain the original config and fingerprint together if writing fails.
+            ledger.rebindPristinePolicy(current);
+            throw e;
+          }
+          console.log('Updated policy fingerprint for a verified empty, paused ledger; no usage rows removed.');
+        } catch(e) {
+          throw new Error('Existing SQLite ledger: ' + e.message +
+            '. Stop Proxy/Collector and retry only if it is a fresh unused ledger.');
+        } finally {
+          try { ledger?.close(); } finally { for(const unlock of release.reverse())unlock(); }
+        }
+      } else {
+        saveConfig(next,file);
+      }
       console.log('Updated local config.json; billing policy and credentials unchanged.');
     }
   }
@@ -127,9 +153,27 @@ try {
   console.log('  Admission: ' + (future && c.policy.preflightCostVerified &&
     c.policy.inputCounter === 'responses_preflight' ? 'operator gates declared (collector still required)' :
     'PAUSED until evidence-backed safety gates are configured'));
-  console.log('\nNext: ' + (!eligible ? 'choose project from ' + PROJECTS + '; ' : '') +
-    (!proxyKey || !adminKey ? 'complete the missing local keys; ' : '') +
-    'see docs/agent-install.md for startup and checks.');
+  const pending=[];
+  if (!eligible) pending.push('ROUTING_PROJECT_UNSET — choose an existing API Project');
+  if (!proxyKey) pending.push('PROJECT_KEY_MISSING — enter a scoped Project API key');
+  if (!adminKey) pending.push('ADMIN_KEY_MISSING — enter an Organization Admin API key');
+  if (c.policy.inputCounter !== 'responses_preflight') pending.push('PREFLIGHT_COUNTER_DISABLED — requires reviewed input-token counter billing');
+  if (!c.policy.preflightCostVerified) pending.push('PREFLIGHT_COST_UNVERIFIED — do not enable without evidence');
+  for (const [key,description] of [
+    ['eligibilityAttestedUntil','ELIGIBILITY_ATTESTATION_MISSING'],
+    ['exclusiveOrgTrafficAttestedUntil','TRAFFIC_ISOLATION_UNVERIFIED'],
+    ['manualCostsAuditedUntil','COST_AUDIT_UNVERIFIED']]) {
+    if (!c.policy[key] || Date.parse(c.policy[key]) <= Date.now()) pending.push(description + ' — use existing evidence if still valid');
+  }
+  if (pending.length) {
+    console.log('  Pending prerequisites:');
+    for (const issue of pending) console.log('    - '+issue);
+  }
+  if (!eligible || !proxyKey || !adminKey)
+    console.log('  NEXT STEP: In your own Terminal (not an agent tool), run npm run configure:local');
+  else
+    console.log('  NEXT STEP: Start Proxy and Collector; run npm run status:local for exact readiness reasons');
+  console.log('  Details: docs/agent-install.md');
   console.log('  Official eligible model groups: ' + MODEL_DOC);
   if (unfiltered) console.log('  WARNING: Unfiltered model IDs are NOT verified complimentary. ' +
     'All requests are conservatively reserved in Premium; unsupported/paid models could incur charges.');
