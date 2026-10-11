@@ -1,5 +1,6 @@
 import { attestedUntil, utcDay, unrestrictedModels, type Config, type Group } from './config.ts';
 import { Ledger } from './ledger.ts';
+import { groupForUnrestrictedModel } from './model-groups.ts';
 
 export class Denial extends Error {
   readonly status: number; readonly code: string; readonly group?: Group;
@@ -53,8 +54,15 @@ export function classify(config: Config, model: unknown): Group {
     throw new Denial(403, 'MODEL_NOT_ELIGIBLE', 'Valid exact model ID required');
   // Empty whitelist accepts any exact model ID. Use the smaller Premium budget
   // when model group cannot be proven. This cannot guarantee free pricing.
-  if (unrestrictedModels(config)) return 'premium';
-  for (const group of ['premium', 'economy'] as const) if (config.quotas[group].models.includes(model)) return group;
+  if (unrestrictedModels(config)) return config.dataSharing.modelGroupAccounting === 'official_v1' ? groupForUnrestrictedModel(model) : 'premium';
+  for (const group of ['premium', 'economy'] as const) {
+    if (config.quotas[group].models.includes(model)) {
+      // In official_v1, configured lists authorize models but never assign
+      // free-token groups. A misplaced Premium ID must not receive Economy capacity.
+      return config.dataSharing.modelGroupAccounting === 'official_v1'
+        ? groupForUnrestrictedModel(model) : group;
+    }
+  }
   throw new Denial(403, 'MODEL_NOT_ELIGIBLE', 'Model is outside the optional whitelist');
 }
 

@@ -46,7 +46,9 @@ The default `quotas.premium.models=[]` and `quotas.economy.models=[]`
 mean **no model-ID whitelist**. Any syntactically valid exact model ID
 can pass that filter. **This does not mean every model is free: paid or
 ineligible models can incur charges.** In unfiltered mode all traffic is
-conservatively counted toward the **smaller Premium budget**, and the usual
+accounted using the published Premium/Economy group mapping for **new installations**.
+Unknown models use the smaller Premium bucket. Existing installations retain
+the older Premium-only accounting until a reviewed migration; the usual
 preflight, collector, operator attestation, data policy and FREE_ONLY gates
 remain in force.
 
@@ -106,3 +108,16 @@ project traffic isolation, input-counter billing behavior and collector health,
 it fails closed; there is no automatic paid OpenAI fallback.
 
 QuotaFuse is an independent Apache-2.0 project, not affiliated with OpenAI.
+
+### Accounting and UNKNOWN rollover
+
+New installs have `dataSharing.modelGroupAccounting: "official_v1"`; both
+`models: []` lists still mean *no whitelist*. Older config files stay on
+Premium-only accounting to preserve SQLite fingerprints and old official
+baselines. Do **not** flip accounting modes directly on a live ledger.
+See [UTC-day UNKNOWN review](docs/runbook.md#reviewed-dispatched-unknown-at-utc-rollover).
+
+
+Existing production Ledgers can switch to the published group mapping with
+[the explicit operator-reviewed new-day upgrade](docs/runbook.md#audited-legacy-to-official-group-accounting-upgrade).
+No automatic migration or resetting SQLite is performed.

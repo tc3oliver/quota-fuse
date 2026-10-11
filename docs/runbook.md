@@ -47,6 +47,87 @@ See [billing-validation.md](billing-validation.md) before enabling any actual Op
 
 Changes to project, Data Sharing tier, model allowlists, safety caps, or token counter modes also fail closed via the persisted policy fingerprint. A persistent previous-day PENDING/UNKNOWN causes new-day requests to fail closed. Without an audited resolution there is no safe self-service bypass. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
 
+## Reviewed DISPATCHED UNKNOWN at UTC rollover
+
+A generation response that has already reached a **terminal status before UTC
+midnight**, but whose usage could not be trusted, may be bounded to its original
+day after a separate, independent accounting review. **This is not a way to
+release an ambiguous network timeout or an unverified request.** If the server
+did not positively observe a terminal response *that day*, keep UNKNOWN and
+PAUSED and obtain provider-specific proof before attempting review.
+
+The new `dispatched-day-bounded` operation is deliberately restricted:
+- The reservation must remain `UNKNOWN / DISPATCHED`; it is **never**
+  converted to COMPLETED, never given `actual=0`, and its entire reserve is
+  retained on the original day.
+- Evidence must identify the request, terminal response timestamp and status,
+  complete and fully settled old-day **and new-day** official Usage, reviewed
+  Costs, absence of other project/bypass traffic, and an external audit ticket.
+  Official aggregation/Costs can be delayed; a positive `payer=openai`
+  marker alone does not prove final accounting.
+- At least **24 hours must pass after the old UTC day ends** before a review;
+  even then, the operator must independently determine that reports are final.
+  Both new-day group baselines must be current and complete.
+- Stop **both** Proxy and Collector first. The reconciliation command takes
+  both instance locks and requires `MANUAL_REVIEW`. If it fails, remain
+  PAUSED. Make encrypted durable backups **outside /tmp** first.
+- No replay of the same idempotency key is permitted. Any other unresolved
+  old-day reservation still blocks the new day. After success, restart the
+  Collector and verify the current-day baseline and `/health/ready`.
+
+Example syntax (**do not run without the above evidence or user approval**):
+
+```bash
+npm run reconcile -- dispatched-day-bounded live-trial-000001 operator-id \
+  2026-10-11T12:34:56Z --attest-finalized-usage-and-costs \
+  'Audit ticket URL, full original response log/request ID, terminal status, original and next UTC-day Usage totals, verified Costs, project isolation evidence and review date'
+```
+
+This command records a separate immutable `dispatched_day_reviews` row and
+`reconciliation_audit` entry. The original reservation remains UNKNOWN with
+its entire `reserved` amount. The review only exempts this *proven bounded*
+request from **cross-day** blocking; it does not forgive billing, weaken
+same-day bounds or allow other unknown outcomes. Never fabricate a terminal
+timestamp to override the safety gate.
+
+## Audited legacy-to-official group-accounting upgrade
+
+**Fresh installations** already have `modelGroupAccounting: "official_v1"`.
+For an **existing** SQLite ledger that accounted all unlisted models as
+Premium, the upgrade must be explicit: abruptly reclassifying historical
+official usage as Economy would create false watermark errors.
+
+After independent review of the affected organization's Usage, Costs,
+and **all older UNKNOWN** outcomes, arrange a maintenance window **at
+the beginning of a new UTC day before the Collector has written any
+observations or clients have made any requests for that day**.
+(00:00 UTC = 08:00 Asia/Taipei.) Safely stop both Proxy and Collector,
+take durable SQLite and config backups, and document a detailed ticket.
+Do not attempt the command if today's baseline already exists; use
+another unobserved UTC day instead.
+
+```bash
+npm run accounting:upgrade -- operator-id \
+  'Audit record URL, reviewed prior-day reservations and terminal response evidence, verified official Usage and Costs, maintenance window, no new-day admission or collector baseline'
+```
+
+This command:
+1. Takes both instance locks and enters MANUAL_REVIEW.
+2. Requires the old fingerprint and no unresolved, unreviewed prior-day
+   reservations.
+3. Requires **zero** current-day or later reservations AND official observations.
+4. Transactionally changes only the policy fingerprint and writes a
+   `accounting_migration_audit` record; then atomically writes the updated
+   0600 `config.json`. History is never relabeled or erased.
+5. Requires starting the Collector first for new, group-aware official
+   baselines, checking Usage/Costs, and restarting Proxy only when safe.
+
+A crash between SQLite and config replacement intentionally leaves
+`POLICY_CHANGED` and PAUSED. Do **not** override the fingerprint or reset
+the ledger to recover. Inspect the audit record, then repair the configuration
+through reviewed operator procedures. Never run this automatically from
+Agent installation or from a scheduler.
+
 ## Checks
 
 ```bash

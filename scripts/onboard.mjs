@@ -143,6 +143,8 @@ try {
   console.log('  Selected projects users: choose an already opted-in Project (no special Project required for All projects).');
   console.log('  Routing Project: ' + (eligible ? 'selected' : 'missing (All projects: any existing; Selected projects: already opted-in only)'));
   console.log('  Organization tier: ' + c.dataSharing.tier + ' (confirm actual tier)');
+  console.log('  Group accounting: '+(c.dataSharing.modelGroupAccounting==='official_v1'
+    ? 'official_v1 exact IDs / unknown Premium' : 'legacy Premium-only (operator-reviewed migration required)'));
   console.log('  Model filter: ' + (unfiltered ? 'OFF — all valid model IDs accepted' :
     'ON — premium=' + c.quotas.premium.models.length + ', economy=' + c.quotas.economy.models.length));
   console.log('  Daily caps: premium ' + c.quotas.premium.dailyTokens.toLocaleString() +
@@ -176,7 +178,7 @@ try {
   console.log('  Details: docs/agent-install.md');
   console.log('  Official eligible model groups: ' + MODEL_DOC);
   if (unfiltered) console.log('  WARNING: Unfiltered model IDs are NOT verified complimentary. ' +
-    'All requests are conservatively reserved in Premium; unsupported/paid models could incur charges.');
+    'Unknown models use Premium; official-group mapping (if enabled) does not prove free eligibility; unsupported/paid models could incur charges.');
   console.log('  QuotaFuse currently routes ONE project; other-project usage may PAUSE the collector.');
   console.log('  No API calls, billing attestation changes, or secret disclosures were made.');
 } catch (error) {

@@ -45,9 +45,12 @@ Do not ask for model IDs. By default both model lists are empty:
 ```
 
 **Both model lists empty means no model-ID whitelist**, not that all models
-are eligible for the free Data Sharing offer. The Proxy and Collector count
-every request in this mode against the smaller **Premium** pool, regardless
-of which group the model actually belongs to. This is conservative for
+are eligible for the free Data Sharing offer. For fresh installs using `modelGroupAccounting: "official_v1"`, the
+Proxy and Collector independently map **exact documented** model IDs to
+Premium or Economy. All unknown IDs conservatively count against Premium.
+Existing config without this versioned option keeps its prior Premium-only
+accounting and original SQLite policy fingerprint. **Neither mode proves
+a model is free.** This is conservative for
 token *quantity* but does **not** prevent billing if an ineligible or paid
 model is used. Only officially covered models and API request shapes are
 eligible for complimentary tokens.
@@ -62,7 +65,12 @@ npm run onboard -- --allow-all
 ```
 
 Once either list contains model IDs, both lists together form a strict
-whitelist. No wildcard paid-model fallback is added by QuotaFuse. Never
+whitelist. With `official_v1`, the two lists control **permission only**:
+the published exact-ID map always determines which daily token group is
+charged. Placing a Premium ID in the Economy list will not give it the larger
+Economy budget. Unknown IDs still fall back to Premium and can incur charges.
+Legacy unversioned ledgers preserve their existing operator-selected groups.
+No wildcard paid-model fallback is added by QuotaFuse. Never
 delete an existing SQLite ledger to bypass `POLICY_CHANGED` or `UNKNOWN`;
 policy changes require operator reconciliation.
 
@@ -80,3 +88,17 @@ Organization `OPENAI_ADMIN_KEY` in `.env.collector`. The default
 `FREE_ONLY` admission policy and billing verification are fail-closed.
 See [agent install](agent-install.md), [deployment](deployment.md), and
 [billing validation](billing-validation.md).
+
+### Accounting mode upgrade (existing installations)
+
+Existing `config.json` files without `modelGroupAccounting` are intentionally
+**NOT** automatically upgraded. Their already-recorded Premium-only Usage
+baselines cannot be relabeled mid-day without false accounting errors.
+Changing the option by hand deliberately fails closed. The explicit
+`npm run accounting:upgrade` command performs a guarded cutover only at the
+beginning of a **new UTC day with no local reservations or official
+observations for that day**; all prior-day UNKNOWNs need reviewed evidence.
+Both processes must be stopped and the operator must take durable backups.
+See [recovery runbook](runbook.md#audited-legacy-to-official-group-accounting-upgrade).
+There is no auto-migration or history deletion. New installations default to
+`official_v1` without requiring a model whitelist.

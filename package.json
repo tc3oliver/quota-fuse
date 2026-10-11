@@ -22,7 +22,8 @@
     "demo": "node --disable-warning=ExperimentalWarning --experimental-strip-types examples/e2e-demo.ts",
     "onboard": "node --disable-warning=ExperimentalWarning --experimental-strip-types scripts/onboard.mjs",
     "doctor": "node --disable-warning=ExperimentalWarning --experimental-strip-types scripts/onboard.mjs --doctor",
-    "configure:local": "node scripts/configure-local.mjs"
+    "configure:local": "node scripts/configure-local.mjs",
+    "accounting:upgrade": "node --disable-warning=ExperimentalWarning --experimental-strip-types scripts/upgrade-accounting.mjs"
   },
   "license": "Apache-2.0",
   "repository": {
