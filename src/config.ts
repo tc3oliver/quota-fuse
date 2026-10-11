@@ -19,6 +19,8 @@ export interface Config {
     inputCounter: 'reject' | 'responses_preflight'; preflightCostVerified: boolean;
     eligibilityAttestedUntil: string | null; exclusiveOrgTrafficAttestedUntil: string | null;
     manualCostsAuditedUntil: string | null; reconcileMaxAgeSeconds: number;
+    /** Format-specific audit, distinct from general token incentive enrollment. */
+    structuredTextVerified?: boolean; structuredTextAttestedUntil?: string | null;
   };
   quotas: Record<Group, { dailyTokens: number; models: string[] }>;
 }
@@ -49,14 +51,16 @@ export function validateConfig(c: Config): Config {
     if (q.dailyTokens > DATA_SHARING_LIMITS[c.dataSharing.tier][group])
       throw new Error('Quota ' + group + ' exceeds ' + c.dataSharing.tier + ' Data Sharing tier entitlement');
     for (const model of q.models) {
-      if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(model) || seen.has(model) || model.endsWith('-latest')) throw new Error('Model IDs must be unique and explicit, not aliases');
+      if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(model) || seen.has(model) || (model.endsWith('-latest') && !['gpt-5-chat-latest','codex-mini-latest'].includes(model))) throw new Error('Model IDs must be unique and explicit, not aliases');
       seen.add(model);
     }
   }
-  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil'] as const) {
+  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil', 'structuredTextAttestedUntil'] as const) {
     const val = c.policy[prop];
-    if (val !== null && (typeof val !== 'string' || !Number.isFinite(Date.parse(val)))) throw new Error('Invalid attestation timestamp: ' + prop);
+    if (val !== null && val !== undefined && (typeof val !== 'string' || !Number.isFinite(Date.parse(val)))) throw new Error('Invalid attestation timestamp: ' + prop);
   }
+  for (const feature of ['structuredTextVerified'] as const)
+    if (c.policy[feature] !== undefined && typeof c.policy[feature] !== 'boolean') throw new Error('Invalid feature gate ' + feature);
   return c;
 }
 export function loadConfig(path = process.env.QG_CONFIG ?? './config.json'): Config {

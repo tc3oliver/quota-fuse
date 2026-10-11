@@ -70,11 +70,11 @@ test('missing proxy auth, data classification, idempotency key are rejected',asy
     assert.equal(seen.length,0);
   } finally {await h.close();}
 });
-test('chat without verified counter fails closed',async()=>{
+test('Chat Completions n>1 rejected before upstream',async()=>{
   const seen:string[]=[],h=await harness(fake({},seen));
   try {
-    const r=await fetch(h.base+'/v1/chat/completions',{method:'POST',headers,body:JSON.stringify({model:payload.model,messages:[{role:'user',content:'hello'}],max_completion_tokens:100,n:1})});
-    assert.equal(r.status,503);assert.equal(seen.length,0);
+    const r=await fetch(h.base+'/v1/chat/completions',{method:'POST',headers,body:JSON.stringify({model:payload.model,messages:[{role:'user',content:'hello'}],max_completion_tokens:100,n:2})});
+    assert.equal(r.status,403);assert.equal(seen.length,0);
   }finally{await h.close();}
 });
 test('unknown outcome retains reservation, provider cannot retry',async()=>{
