@@ -88,6 +88,8 @@ test('local function schema and tool result round trip with bounded preflight',a
     assert.equal(h.seen[0].body.tools[0].name,'read_file');
     assert.equal(h.seen[0].body.tool_choice,'auto');
     assert.equal(h.seen[1].body.tools[0].name,'read_file');
+    assert.equal(h.seen[0].body.parallel_tool_calls,undefined);
+    assert.equal(h.seen[1].body.parallel_tool_calls,true);
   }finally{await h.close();}
   const next=await start({});
   try {
@@ -158,4 +160,71 @@ test('external JSON schema reference and unsupported chat function mode are reje
     assert.equal((await send(h.base,chat,'/v1/chat/completions')).status,403);
     assert.equal(h.seen.length,0);
   }finally{await h.close();}
+});
+
+
+test('Chat SSE reindexes parallel tool call chunks after reasoning items',async()=>{
+  const c=cfg(),l=verifiedLedger(),seen:string[]=[];
+  const complete={id:'resp_parallel',model,status:'completed',
+    output:[{type:'reasoning',id:'rs_0'}, {type:'function_call',name:'read_file',call_id:'call_a',arguments:'{"path":"a"}'},
+      {type:'function_call',name:'read_file',call_id:'call_b',arguments:'{"path":"b"}'}],
+    usage:{input_tokens:20,output_tokens:18}};
+  const frames=[
+    {type:'response.created'},
+    {type:'response.output_item.added',output_index:0,item:{type:'reasoning'}},
+    {type:'response.output_item.added',output_index:1,item:{type:'function_call',name:'read_file',call_id:'call_a'}},
+    {type:'response.function_call_arguments.delta',output_index:1,delta:'{"path":"a"}'},
+    {type:'response.output_item.added',output_index:2,item:{type:'function_call',name:'read_file',call_id:'call_b'}},
+    {type:'response.function_call_arguments.delta',output_index:2,delta:'{"path":"b"}'},
+    {type:'response.completed',response:complete}
+  ];
+  const sse=frames.map(f=>'event: '+f.type+'\ndata: '+JSON.stringify(f)+'\n\n').join('');
+  const upstream=(async(url:any)=>{
+    seen.push(String(url));
+    if(String(url).endsWith('/input_tokens'))return new Response(JSON.stringify({object:'response.input_tokens',input_tokens:20}));
+    return new Response(sse,{status:200,headers:{'content-type':'text/event-stream'}});
+  }) as typeof fetch;
+  const server=makeServer(c,l,{fetchImpl:upstream});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  try {
+    const base='http://127.0.0.1:'+(server.address() as any).port;
+    const r=await send(base,{model,messages:[{role:'user',content:'Read both'}],max_completion_tokens:128,
+      tools:[{type:'function',function:{name:'read_file',parameters:{type:'object',properties:{path:{type:'string'}}}}}],
+      parallel_tool_calls:true,stream:true},'/v1/chat/completions');
+    assert.equal(r.status,200);
+    const text=await r.text();
+    const chunks=text.split('\n\n').filter(x=>x.startsWith('data: {')).map(x=>JSON.parse(x.slice(6)));
+    const indices=chunks.flatMap(x=>x.choices[0].delta.tool_calls?.map((t:any)=>t.index) ?? []);
+    assert.deepEqual(indices,[0,0,1,1]);
+    assert.match(text,/\[DONE\]/);
+    assert.equal(seen.length,2);
+    assert.equal(l.find('multi-turn-001')?.state,'COMPLETED');
+  }finally{await new Promise<void>(resolve=>server.close(()=>{l.close();resolve();}));}
+});
+
+test('expiring structured format attestation during preflight blocks dispatch',async()=>{
+  const c=cfg(),l=verifiedLedger();
+  const baseTime=Date.now();
+  let tick=baseTime;
+  c.policy.structuredTextVerified=true;
+  c.policy.structuredTextAttestedUntil=new Date(baseTime+1000).toISOString();
+  const seen:string[]=[];
+  const upstream=(async(url:any)=>{
+    seen.push(String(url));
+    if(String(url).endsWith('/input_tokens')){
+      tick=baseTime+2000;
+      return new Response(JSON.stringify({object:'response.input_tokens',input_tokens:20}));
+    }
+    throw new Error('Generation must not dispatch with expired attestation');
+  }) as typeof fetch;
+  const server=makeServer(c,l,{fetchImpl:upstream,now:()=>new Date(tick)});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  try {
+    const base='http://127.0.0.1:'+(server.address() as any).port;
+    const r=await send(base,{model,input:'return JSON',max_output_tokens:64,
+      text:{format:{type:'json_object'}}});
+    assert.equal(r.status,503);
+    assert.equal(seen.length,1);
+    assert.equal(l.find('multi-turn-001')?.state,'UNKNOWN');
+  } finally {await new Promise<void>(resolve=>server.close(()=>{l.close();resolve();}));}
 });

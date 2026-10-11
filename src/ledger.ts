@@ -22,10 +22,10 @@ export class Ledger {
   constructor(path: string, options: { recoverPending?: boolean; readOnly?: boolean } = {}) {
     if (!options.readOnly) mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path, { readOnly: options.readOnly === true });
-    if (options.readOnly) {
-      this.db.exec('PRAGMA busy_timeout = 5000;');
-      return;
-    }
+    // Two processes may open the ledger together on boot. Install busy_timeout
+    // before any migration/DDL (not after it), or one may exit on SQLITE_BUSY.
+    this.db.exec('PRAGMA busy_timeout = 5000;');
+    if (options.readOnly) return;
     if (path !== ':memory:') chmodSync(path, 0o600);
     this.db.exec(migration);
     // Additive migration. Existing checkpoints cannot be safely assigned a historical
