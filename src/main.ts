@@ -1,0 +1,14 @@
+import { loadConfig } from './config.ts';
+import { Ledger } from './ledger.ts';
+import { makeServer } from './server.ts';
+import { acquireInstanceLock } from './instance-lock.ts';
+const config = loadConfig();
+const token = process.env.QG_PROXY_TOKEN;
+if (!token || token.length < 32) throw new Error('QG_PROXY_TOKEN must be at least 32 characters');
+if (process.env.OPENAI_ADMIN_KEY) throw new Error('Admin credential must run in separate collector process');
+const releaseLock = acquireInstanceLock(config.server.storage);
+const ledger = new Ledger(config.server.storage);
+ledger.assertPolicy(config);
+const server = makeServer(config, ledger);
+server.listen(config.server.port, config.server.host, () => console.log(`Quota Guard listening on ${config.server.host}:${config.server.port}; fail closed by default`));
+for (const signal of ['SIGINT','SIGTERM'] as const) process.once(signal, () => server.close(() => { ledger.close(); releaseLock(); process.exit(0); }));

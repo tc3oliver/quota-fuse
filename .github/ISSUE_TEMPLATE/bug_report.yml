@@ -1,0 +1,27 @@
+name: Bug report
+about: Report an issue without confidential data
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Never attach live credentials, prompts, customer data or organization IDs."
+  - type: textarea
+    id: summary
+    attributes:
+      label: Description
+      description: Expected vs observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Safe reproduction
+      description: Use a mocked provider and scrub identifiers
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Potential billing / privacy impact
+    validations:
+      required: true

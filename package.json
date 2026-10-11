@@ -1,0 +1,41 @@
+{
+  "name": "quota-fuse",
+  "version": "0.1.1",
+  "description": "Fail-closed quota firewall for OpenAI Data Sharing incentive traffic",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/main.ts",
+    "collector": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/collector-cli.ts",
+    "quota": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/quota-cli.ts",
+    "test": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test tests/**/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "typecheck": "tsc --noEmit",
+    "demo": "node --disable-warning=ExperimentalWarning --experimental-strip-types examples/e2e-demo.ts"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tc3oliver/quota-fuse.git"
+  },
+  "files": [
+    "src",
+    "docs",
+    "migrations",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "config.example.json"
+  ],
+  "private": false,
+  "devDependencies": {
+    "@types/node": "22.19.7",
+    "typescript": "5.9.3"
+  },
+  "bugs": {
+    "url": "https://github.com/tc3oliver/quota-fuse/issues"
+  },
+  "homepage": "https://github.com/tc3oliver/quota-fuse#readme"
+}

@@ -1,0 +1,16 @@
+name: Feature request
+about: Propose a guarded capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Use case and motivation
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: How does it preserve fail-closed behavior?
+    validations:
+      required: true

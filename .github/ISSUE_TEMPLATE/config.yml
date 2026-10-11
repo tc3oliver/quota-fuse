@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerabilities
+    url: https://github.com/tc3oliver/quota-fuse/security/advisories/new
+    about: Report vulnerabilities privately if GitHub private reporting is enabled; never disclose secrets publicly.
