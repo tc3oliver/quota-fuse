@@ -81,4 +81,4 @@ Review the [billing validation checklist](billing-validation.md), including dedi
 
 ### Supported deployment scope
 
-The current implementation supports a **single local instance and one SQLite writer**. Do not share the DB over a network filesystem, run multiple independent quota-fuse databases for the same organization's incentive, or expose this server to the internet. For full compatibility and security constraints see [technical notes](development.md).
+The current implementation supports a **single local Proxy and one Collector per SQLite database**, with SQLite transactions coordinating local writes. Do not share the DB over a network filesystem, run multiple independent quota-fuse databases for the same organization's incentive, or expose this server to the internet. For full compatibility and security constraints see [technical notes](development.md).

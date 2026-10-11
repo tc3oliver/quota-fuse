@@ -9,7 +9,7 @@ QuotaFuse is a local OpenAI-compatible proxy for **OpenAI Data Sharing complimen
 
 - **Conservative by default:** No automatic switch to paid API usage.
 - **Shared quota tracking:** Select your OpenAI project and Build / Launch / Grow tier. Premium and economy model groups have separate daily caps.
-- **Local and private:** The proxy listens on `127.0.0.1`. Its API key is separate from the admin key used for usage collection.
+- **Local access:** The proxy listens on `127.0.0.1`. Project and Admin API keys run in separate processes.
 - **Safe fallback signal:** Clients can use quota-related 429/503 responses to switch to another provider at a safe task boundary.
 
 > **Important:** QuotaFuse reduces the risk of unexpected charges; it cannot guarantee a zero-cost bill. OpenAI's usage data may be delayed, and direct or other-project API traffic may consume the same allowance. **The current release is not yet validated against a live Data Sharing bill. Keep inference disabled until you complete the [billing checklist](docs/billing-validation.md).** Use only public, non-sensitive input.

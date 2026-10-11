@@ -43,6 +43,9 @@ test('status explains missing service without reporting credentials', () => {
   const dir = mkdtempSync(join(tmpdir(), 'quota-fuse-status-'));
   try {
     copyFileSync(join(root,'config.example.json'),join(dir,'config.json'));
+    const cfg = JSON.parse(readFileSync(join(dir,'config.json'),'utf8'));
+    cfg.server.port = 0; // Guaranteed unreachable for a client URL.
+    writeFileSync(join(dir,'config.json'),JSON.stringify(cfg));
     const secret = 'do-not-print-' + '1234567890'.repeat(4);
     const result = spawnSync(process.execPath, [status], {
       cwd: dir, encoding: 'utf8', env: { ...process.env, QG_CONFIG: './config.json', QG_PROXY_TOKEN: secret }
