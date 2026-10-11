@@ -12,7 +12,7 @@ All automated tests use mock upstream responses; no live billing calls are made.
 | 7 Timeout/connection reset | PASS mock | UNKNOWN, no retry |
 | 8 Duplicate idempotency key | PASS | 409, exactly one dispatch |
 | 9 Collector API unavailable/pagination | PASS mock | Fail closed on incomplete pages |
-| 10 Watermark regression | PASS | Unit rejection |
+| 10 Watermark regression | PASS | Unit rejection; baseline + post-anchor local usage regression |
 | 11 UTC midnight rollover | PARTIAL | Prior-day PENDING/UNKNOWN blocks next day; live-edge test pending |
 | 12 Restart/busy/full/corrupt SQLite | PARTIAL | Restart recovery and corrupt-file denial tested; busy/full fault injection pending |
 | 13 Unknown model/tools/paid features | PASS | Strict request allowlist |
@@ -25,3 +25,5 @@ All automated tests use mock upstream responses; no live billing calls are made.
 | 20 Fault tracking + recovery | PARTIAL | Fail closed/UNKNOWN; reviewed manual recovery SOP only |
 
 **Release classification:** `v0.1.1` OSS technical preview. **NO-GO production quota/billing assurance**, including unverified free counter billing. Do not interpret mock test passing as production activation approval.
+
+Admin usage and initial-day baseline are **conditionally trusted only**; no mock test verifies delayed upstream reporting. See [billing-validation.md](billing-validation.md).

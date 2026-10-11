@@ -19,6 +19,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
     const fetchImpl = options.fetchImpl ?? fetch;
     let cursor: string | null = null;
     const visited = new Set<string>();
+    let sawBucket = false;
     for (let index = 0; index < 100; index++) {
       const u = new URL(config.upstream.baseUrl + '/organization/usage/completions');
       u.searchParams.set('start_time', String(today));
@@ -33,7 +34,8 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
       const json: any = await resp.json();
       if (json?.object !== 'page' || !Array.isArray(json.data) || typeof json.has_more !== 'boolean') throw new Error('Incomplete usage API response');
       for (const bucket of json.data) {
-        if (!whole(bucket.start_time) || bucket.start_time !== today || !Array.isArray(bucket.results)) throw new Error('Invalid usage day bucket');
+        if (bucket?.object !== 'bucket' || !whole(bucket.start_time) || bucket.start_time !== today || !whole(bucket.end_time) || bucket.end_time <= today || !Array.isArray(bucket.results)) throw new Error('Invalid usage day bucket');
+        sawBucket = true;
         for (const row of bucket.results) {
           // Unknown/other project usage may consume the same organization-level incentive: pause.
           if (!row || row.project_id !== config.upstream.projectId || typeof row.model !== 'string') throw new Error('Unattributed or side-channel usage detected');
@@ -45,6 +47,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
         }
       }
       if (!json.has_more) {
+        if (!sawBucket) throw new Error('Missing official day bucket (cannot assume zero usage)');
         for (const group of ['premium','economy'] as const) ledger.recordObservation(day, group, sums[group], now);
         ledger.setPause(null);
         return sums;

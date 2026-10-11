@@ -136,6 +136,9 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           if (counted?.object !== 'response.input_tokens' || !Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > provisionalInput) throw new Error('Invalid preflight counter');
           if (inputTokens + maxOutput + config.policy.accountMargin > reservation.reserved) throw new Error('Insufficient reservation');
           if (utcDay(nowFn()) !== reservation.utc_day) throw new Error('UTC rollover during preflight');
+          // The state transition commits BEFORE attempting the generation request.
+          // Any later failure remains UNKNOWN; unconsumed provisional capacity is released.
+          ledger.prepareDispatch(config, key, inputTokens, maxOutput, nowFn());
           // Reusing only the server-provided approved values, never client auth headers.
           const upstream = await fetchImpl(config.upstream.baseUrl + path.slice(3), {
             method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(120000), disconnect.signal]),

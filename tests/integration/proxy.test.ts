@@ -40,6 +40,7 @@ test('JSON requests settle and forward only server credentials',async()=>{
     const res=await post(h.base);assert.equal(res.status,200);assert.equal((await res.json()).id,'resp');
     assert.equal(h.l.find('unique-request-123')?.actual,18);
     assert.equal(h.l.find('unique-request-123')?.state,'COMPLETED');
+    assert.equal(h.l.find('unique-request-123')?.phase,'DISPATCHED');
     assert.equal(seen.length,2);
   } finally {await h.close();}
 });
@@ -80,7 +81,7 @@ test('unknown outcome retains reservation, provider cannot retry',async()=>{
   const seen:string[]=[],h=await harness(fake({error:true},seen));
   try {
     const r=await post(h.base);assert.equal(r.status,503);
-    assert.equal(h.l.find('unique-request-123')?.state,'UNKNOWN');assert.ok(h.l.find('unique-request-123')!.reserved>0);
+    assert.equal(h.l.find('unique-request-123')?.state,'UNKNOWN');assert.equal(h.l.find('unique-request-123')?.phase,'PREFLIGHT');assert.ok(h.l.find('unique-request-123')!.reserved>0);
     assert.equal((await post(h.base)).status,409);assert.equal(seen.length,1);
   }finally{await h.close();}
 });

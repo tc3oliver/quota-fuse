@@ -24,11 +24,11 @@
 | Unexpected price outside proxy | External account budget limits and cost alerting remain necessary; not guaranteed hard stops |
 | Malicious config | Config admin is a trust boundary; changing allowlist or attestations intentionally grants privileges |
 
-The collector summarizes **organization usage**, which is not a real-time incentive-reservation API. `MAX(official observed, locally settled) + unresolved local reservations` is valid as a conservative capacity estimator only when the org's affected model traffic is exclusively accounted for, manually attested, and continuously verified. It is **not valid for uncontrolled external parallel traffic**. A request crossing the threshold may be billed as a whole. This proxy is a risk-reduction device, not a billing enforcement primitive supplied by the provider.
+The collector summarizes **organization usage**, which is not a real-time incentive-reservation API. `max(latest_official, initial_observed_baseline + all subsequent locally settled and outstanding reservations)` is conditional on a **complete independently validated baseline**, exclusive control of all eligible organization traffic after that baseline, and ongoing monitoring. Admin Usage cannot prove these preconditions or report an atomic complimentary balance. It is **not valid for uncontrolled external parallel traffic**. A request crossing the threshold may be billed as a whole. This proxy is a risk-reduction device, not a billing enforcement primitive supplied by the provider.
 
 ## Lifecycle
 
-- PENDING/UNKNOWN outcomes retain their original-day reservation and block rollover to the next UTC day.
+- PREFLIGHT/PENDING/UNKNOWN outcomes retain their original-day reservation and block rollover to the next UTC day.
 - SQLite stores a fingerprint of project ID, quotas, model lists, counters and caps; policy drift requires manual reconciliation and prevents restart.
 - Client idempotency keys do not make OpenAI requests idempotent; Quota Guard blocks repeat dispatch and returns 409.
 - Logging excludes prompt content/response content/credentials. Readonly status contains aggregate counts only.
@@ -37,7 +37,7 @@ The collector summarizes **organization usage**, which is not a real-time incent
 
 ## Security limits / unimplemented
 
-- No independent system-clock skew oracle, tamper-resistant audit logs, out-of-band enrollment verification, or production billing attestation automation.
+- No independent proof that Admin Usage is complete at the first observation (possible reporting lag), no independently guaranteed zero billing, no independent system-clock skew oracle, tamper-resistant audit logs, out-of-band enrollment verification, or production billing attestation automation.
 - No guaranteed cross-platform SDK compatibility, no production-validated Chat Completions trusted counter, no audited proxy-wide query concurrency against real OpenAI limits.
 - The provisional raw-byte reservation is intentionally pessimistic and **not** a substitute for verified OpenAI input token counts; every sent Responses request must first receive a validated official counter response. The counter request itself must be audited for billing eligibility.
 - Node `node:sqlite` is experimental in Node 22; pin the runtime and re-test upgrades.

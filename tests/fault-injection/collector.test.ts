@@ -43,3 +43,12 @@ test('corrupt SQLite cannot silently reset ledger and start serving',()=>{
   try {writeFileSync(file,Buffer.alloc(2048,0xff));assert.throws(()=>new Ledger(file));}
   finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('empty official usage page is not trusted as zero usage', async()=> {
+  const l=new Ledger(':memory:'),c=cfg();
+  const fake=(async()=>new Response(JSON.stringify({object:'page',data:[],has_more:false,next_page:null}))) as typeof fetch;
+  try { await assert.rejects(()=>collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'}),/Missing official day bucket/);
+    assert.equal(l.isPaused(),true);
+    assert.equal(l.observation(new Date().toISOString().slice(0,10),'premium'),undefined);
+  } finally {l.close();}
+});

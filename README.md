@@ -20,7 +20,7 @@ QuotaFuse is an OpenAI-compatible reverse proxy that **refuses uncertain or pote
 | Proxy-controlled output cap, pessimistic provisional reserve | Implemented |
 | Exact Responses preflight `/responses/input_tokens` | Gated by explicit cost verification; not live-audited |
 | Usage-aware settlement, UNKNOWN retention, idempotency | Implemented |
-| Separate Admin Usage API collector + paginated model/project totals | Implemented, mock-tested; single collector lock |
+| Separate Admin Usage API collector + paginated model/project totals | Implemented, mock-tested; **not official remaining complimentary tokens** |
 | Local-only auth, public-data attestation, no request body logs | Implemented |
 | `/quota`, `/health/live`, `/health/ready`, `/v1/models` | Implemented |
 | `POST /v1/chat/completions` | **Explicit 503** until independently validated conservative counter exists |
@@ -32,6 +32,12 @@ QuotaFuse is an OpenAI-compatible reverse proxy that **refuses uncertain or pote
 The supplied initial spec suggested Fastify; this first implementation uses the **Node.js 22 native HTTP API** instead, with TypeScript's built-in type stripping and `node:sqlite`. No production runtime npm dependencies are required, and unit/integration tests run without network access. A subsequent release may adopt Fastify after the same security checks are reproduced. The `node:sqlite` API is still experimental on Node 22; pin/test your runtime. The runtime config is strict **JSON** (`config.example.json`); `config.example.yml` is for spec reference only.
 
 ## Quick start (safe default)
+
+```bash
+git clone https://github.com/tc3oliver/quota-fuse.git
+cd quota-fuse
+```
+
 
 ```bash
 cp config.example.json config.json
@@ -69,7 +75,7 @@ All endpoints other than those listed above, multimodal inputs, remote state, to
 ## Deploying with a real OpenAI account (operator-audited only)
 
 1. Confirm eligibility, enrollment, correct group sizes, positive account balance, the exact eligible model IDs, and that the dedicated project is configured for Data Sharing. Eligibility is **not** inferred from model names. Models are empty by default.
-2. Audit whether the separate `/v1/responses/input_tokens` call itself is eligible and nonchargeable for your setup, and whether its counts match the exact allowed request shape. Set `policy.inputCounter` to `responses_preflight` and `policy.preflightCostVerified` to `true` **only after checking actual Costs**.
+2. Follow [billing validation and reconciliation](docs/billing-validation.md); audit whether the separate `/v1/responses/input_tokens` call itself is eligible and nonchargeable for your setup, and whether its counts match the exact allowed request shape. Set `policy.inputCounter` to `responses_preflight` and `policy.preflightCostVerified` to `true` **only after checking actual Costs**.
 3. Establish exclusive control of all org traffic eligible for these shared group caps, or treat other project traffic as untrusted and keep the proxy paused. The collector rejects unexpected project/model usage.
 4. Set three **expiring** operator attestation timestamps to UTC times after the current time: `eligibilityAttestedUntil`, `exclusiveOrgTrafficAttestedUntil`, `manualCostsAuditedUntil`. These are human operational controls, not proof of eligibility obtained by an API.
 5. Use a separate shell/process holding only `OPENAI_ADMIN_KEY` to run `npm run collector -- --once` or the recurring collector. **Never provide the Admin key to the proxy**. Run the proxy with only `OPENAI_API_KEY` (project scoped) and `QG_PROXY_TOKEN`.
@@ -81,7 +87,7 @@ All endpoints other than those listed above, multimodal inputs, remote state, to
 
 ```text
 src/                     Policy, ledger, HTTP transport, collector and CLI
-migrations/              SQLite schema
+migrations/              SQLite schema and additive safety migrations
 package-lock.json        Pinned dev dependencies for repeatable CI installs
 config.example.json      Runtime configuration (deny-by-default)
 SPEC.md                  Supplied technical specification
@@ -90,6 +96,7 @@ tests/                   No-live-API unit, integration, failure-injection tests
 docs/security.md         Threat model and disclosure
 docs/runbook.md         Setup, incidents and operational restrictions
 docs/test-matrix.md     Acceptance matrix and explicit gaps
+docs/billing-validation.md  Admin API limitations, live billing validation, operator recovery
 docs/release-checklist.md OSS publish and security-settings checklist
 ```
 
@@ -113,3 +120,5 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [docs/s
 - [Organization Usage API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions)
 
 **Apache-2.0**. This is an independent project, not affiliated with or endorsed by OpenAI.
+
+Preflight-only `UNKNOWN` reservations may be **manually** reconciled after independently verified zero billable usage, using `npm run reconcile` and an evidence reference. See [billing validation](docs/billing-validation.md); generation-dispatched unknown outcomes are deliberately not automatically released.

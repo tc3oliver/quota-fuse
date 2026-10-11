@@ -10,6 +10,7 @@
     "start": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/main.ts",
     "collector": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/collector-cli.ts",
     "quota": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/quota-cli.ts",
+    "reconcile": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/reconcile-cli.ts",
     "test": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test tests/**/*.test.ts",
     "check": "npm run typecheck && npm test",
     "typecheck": "tsc --noEmit",
