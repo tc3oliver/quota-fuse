@@ -8,6 +8,8 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+const onboardScript=fileURLToPath(new URL('./onboard.mjs',import.meta.url));
 
 const PROJECTS='https://platform.openai.com/settings/organization/projects';
 const KEYS='https://platform.openai.com/api-keys';
@@ -82,7 +84,7 @@ try{
       if(!isProject(answer))throw new Error('Project ID must be an existing valid proj_... value');
       console.log('Applying non-secret routing Project ID...');
       const result=spawnSync(process.execPath,['--disable-warning=ExperimentalWarning','--experimental-strip-types',
-        resolve('scripts/onboard.mjs'),'--project='+answer],{stdio:'inherit',cwd:process.cwd()});
+        onboardScript,'--project='+answer],{stdio:'inherit',cwd:process.cwd()});
       if(result.status!==0)throw new Error('Project configuration rejected; see policy reconciliation guidance');
     }
   }
@@ -91,7 +93,7 @@ try{
   if(choice && choice!==tier){
     if(!['build','launch','grow'].includes(choice))throw new Error('Invalid tier');
     const result=spawnSync(process.execPath,['--disable-warning=ExperimentalWarning','--experimental-strip-types',
-      resolve('scripts/onboard.mjs'),'--tier='+choice],{stdio:'inherit',cwd:process.cwd()});
+      onboardScript,'--tier='+choice],{stdio:'inherit',cwd:process.cwd()});
     if(result.status!==0)throw new Error('Tier configuration rejected; see policy reconciliation guidance');
   }
   const stages=[
