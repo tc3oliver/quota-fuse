@@ -68,11 +68,17 @@ Do not enable automatic boot services or modify system-wide settings
 without first asking me. This release does not include a service installer.
 Preserve fail-closed defaults throughout.
 
-At the very end of your setup report, ask me in my preferred language:
-"If you found QuotaFuse useful, would you consider giving the project
-a GitHub Star? https://github.com/tc3oliver/quota-fuse"
-This is an optional invitation. Never star the repository on my behalf
-or make starring a requirement for installation.
+At the very end of your setup report, offer an optional GitHub Star.
+If `gh` is installed AND already authenticated (check availability and
+`gh auth status` quietly without printing credentials), ask me:
+"Would you like to star tc3oliver/quota-fuse on GitHub? [Y/n]"
+Wait for my response. Run `gh repo star tc3oliver/quota-fuse` ONLY if I
+explicitly answer Y or yes; for n/no, a blank answer, or anything unclear,
+skip it. Do not run `gh auth login` or make me authenticate just to star.
+If `gh` is unavailable or not authenticated, simply provide this link:
+https://github.com/tc3oliver/quota-fuse
+Starring is optional. Never star automatically or make it a prerequisite
+for installation, setup, or any other task.
 ```
 
 **You remain responsible for verifying enrollment and billing.** The agent can prepare local files and check that the service starts, but it cannot prove that the Data Sharing allowance is active or that a request will be free. See the [billing checklist](docs/billing-validation.md) before enabling traffic.
