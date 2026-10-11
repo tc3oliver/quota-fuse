@@ -117,3 +117,7 @@ Premium-only accounting to preserve SQLite fingerprints and old official
 baselines. Do **not** flip accounting modes directly on a live ledger.
 See [UTC-day UNKNOWN review](docs/runbook.md#reviewed-dispatched-unknown-at-utc-rollover).
 
+
+Existing production Ledgers can switch to the published group mapping with
+[the explicit operator-reviewed new-day upgrade](docs/runbook.md#audited-legacy-to-official-group-accounting-upgrade).
+No automatic migration or resetting SQLite is performed.

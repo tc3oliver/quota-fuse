@@ -10,6 +10,7 @@ const terminal='2025-01-01T11:00:05.000Z';
 const evidence='response log request ID req_xyz confirms status incomplete at 11:00 UTC; independently audited finalized old+new UTC day usage, all project traffic and Costs dashboard after the required delay: audit-ticket-0059';
 function setup(phase:'DISPATCHED'|'PREFLIGHT'='DISPATCHED') {
   const l=new Ledger(':memory:'),c=cfg();
+  l.assertPolicy(c);
   l.recordObservation(oldDay,'premium',0,new Date(oldDay+'T11:00:00Z'));
   l.setPause(null);
   l.admit(c,{key:'live-trial-000001',hash:'hash-test',requestId:'req-unique',
@@ -91,5 +92,31 @@ test('reviewed dispatched request does not hide another older unreconciled reser
      (idempotency_key,request_id,body_hash,model,group_name,utc_day,reserved,actual,state,admitted_at,updated_at,phase)
      VALUES('second','req-2','hash','gpt-test-2026-10-11','premium','2025-01-01',90,NULL,'UNKNOWN','2025-01-01T10:00:00Z','2025-01-01T11:00:00Z','PREFLIGHT')`).run();
    assert.equal(l.hasCrossDayUnknown(audited),true);
+ }finally{l.close();}
+});
+
+test('a stopped empty new UTC day can migrate group mapping after separately audited prior-day UNKNOWN',()=>{
+ const {l,c}=setup();
+ try{
+   l.reviewDispatchedDay('live-trial-000001','operator1',terminal,evidence,new Date('2025-01-03T10:01:00Z'));
+   const updated=structuredClone(c);
+   updated.dataSharing.modelGroupAccounting='official_v1';
+   l.upgradeOfficialGroupAccounting(c,updated,'operator1',evidence,new Date('2025-01-04T00:01:00Z'));
+   assert.doesNotThrow(()=>l.verifyPolicy(updated));
+   assert.equal(l.hasCrossDayUnknown('2025-01-04'),false);
+   assert.equal(l.find('live-trial-000001')?.state,'UNKNOWN');
+   const row=l.db.prepare('SELECT * FROM accounting_migration_audit').get() as any;
+   assert.equal(row.effective_utc_day,'2025-01-04');
+   assert.equal(row.operator,'operator1');
+ }finally{l.close();}
+});
+test('existing current-day official baseline prevents group reclassification',()=>{
+ const {l,c}=setup();
+ try{
+   const updated=structuredClone(c);updated.dataSharing.modelGroupAccounting='official_v1';
+   assert.throws(()=>l.upgradeOfficialGroupAccounting(c,updated,'operator1',evidence,new Date('2025-01-03T10:01:00Z')),(e:any)=>e.code==='PRIOR_DAY_UNKNOWN');
+   l.reviewDispatchedDay('live-trial-000001','operator1',terminal,evidence,new Date('2025-01-03T10:01:00Z'));
+   assert.throws(()=>l.upgradeOfficialGroupAccounting(c,updated,'operator1',evidence,new Date('2025-01-03T10:01:00Z')),(e:any)=>e.code==='DAY_ALREADY_STARTED');
+   assert.doesNotThrow(()=>l.verifyPolicy(c));
  }finally{l.close();}
 });

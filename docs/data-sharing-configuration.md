@@ -89,7 +89,11 @@ See [agent install](agent-install.md), [deployment](deployment.md), and
 Existing `config.json` files without `modelGroupAccounting` are intentionally
 **NOT** automatically upgraded. Their already-recorded Premium-only Usage
 baselines cannot be relabeled mid-day without false accounting errors.
-Changing the option to `official_v1` changes the SQLite policy fingerprint
-and deliberately fails closed until a separate audited migration is reviewed.
+Changing the option by hand deliberately fails closed. The explicit
+`npm run accounting:upgrade` command performs a guarded cutover only at the
+beginning of a **new UTC day with no local reservations or official
+observations for that day**; all prior-day UNKNOWNs need reviewed evidence.
+Both processes must be stopped and the operator must take durable backups.
+See [recovery runbook](runbook.md#audited-legacy-to-official-group-accounting-upgrade).
 There is no auto-migration or history deletion. New installations default to
 `official_v1` without requiring a model whitelist.

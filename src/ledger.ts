@@ -102,6 +102,37 @@ export class Ledger {
       this.db.prepare('INSERT INTO policy_fingerprint(id,sha256) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET sha256=excluded.sha256').run(next);
     });
   }
+  /**
+   * Explicit cross-day cutover from legacy Premium-only to exact-ID grouping.
+   * Never relabels history. Today must be EMPTY, no pending older uncertainty,
+   * and both services stopped. The caller writes config.json after success.
+   */
+  upgradeOfficialGroupAccounting(oldConfig: Config, nextConfig: Config,
+      operator: string, evidence: string, now = new Date()): void {
+    if (oldConfig.dataSharing.modelGroupAccounting === 'official_v1' ||
+        nextConfig.dataSharing.modelGroupAccounting !== 'official_v1' ||
+        !/^[a-zA-Z0-9_.@-]{3,100}$/.test(operator) ||
+        evidence.trim().length < 80 || evidence.length > 4096)
+      throw new LedgerError('INVALID_EVIDENCE', 'Explicit accounting version and detailed independent evidence required');
+    this.tx(() => {
+      if (!this.isPaused()) throw new LedgerError('PAUSE_REQUIRED', 'Collector and Proxy must be stopped and ledger paused');
+      const day = utcDay(now);
+      if (this.hasCrossDayUnknown(day))
+        throw new LedgerError('PRIOR_DAY_UNKNOWN', 'Unaudited previous-day reservations prohibit accounting changes');
+      for (const table of ['reservations','observations'] as const) {
+        const count = this.db.prepare('SELECT COUNT(*) AS n FROM '+table+' WHERE utc_day>=?').get(day) as {n:number};
+        if (count.n) throw new LedgerError('DAY_ALREADY_STARTED','Current UTC day has persisted usage or baseline; wait until an EMPTY new UTC day');
+      }
+      const record = this.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as {sha256:string}|undefined;
+      const oldHash=this.policyHash(oldConfig),newHash=this.policyHash(nextConfig);
+      if (!record || record.sha256!==oldHash || oldHash===newHash)
+        throw new LedgerError('POLICY_CHANGED','Unexpected accounting fingerprint; do not override current policy');
+      this.db.prepare('UPDATE policy_fingerprint SET sha256=? WHERE id=1').run(newHash);
+      this.db.prepare(`INSERT INTO accounting_migration_audit
+         (operator,evidence,effective_utc_day,from_fingerprint,to_fingerprint,created_at)
+         VALUES(?,?,?,?,?,?)`).run(operator,evidence,day,oldHash,newHash,now.toISOString());
+    });
+  }
   pauseReason(): string | null { return (this.db.prepare('SELECT paused_reason FROM guard_control WHERE id=1').get() as {paused_reason:string|null}).paused_reason; }
   isPaused(): boolean { return this.pauseReason() !== null; }
   setPause(reason: string | null): void {

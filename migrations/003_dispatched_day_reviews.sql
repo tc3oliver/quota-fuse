@@ -9,3 +9,14 @@ CREATE TABLE IF NOT EXISTS dispatched_day_reviews (
  evidence TEXT NOT NULL,
  reviewed_at TEXT NOT NULL
 );
+
+-- Group-accounting upgrades are explicit, on empty-new-day boundaries only.
+CREATE TABLE IF NOT EXISTS accounting_migration_audit (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ operator TEXT NOT NULL,
+ evidence TEXT NOT NULL,
+ effective_utc_day TEXT NOT NULL,
+ from_fingerprint TEXT NOT NULL,
+ to_fingerprint TEXT NOT NULL,
+ created_at TEXT NOT NULL
+);

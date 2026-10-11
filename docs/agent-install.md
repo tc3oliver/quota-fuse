@@ -196,3 +196,9 @@ certified free. Read [the recovery runbook](runbook.md#reviewed-dispatched-unkno
 for strict terminal-response evidence requirements, a full UTC-day billing
 cooldown, and an audited dispatched-day UNKNOWN review. Do not automatically
 execute reconciliation or alter any real ledger without explicit approval.
+
+To migrate an existing Premium-only ledger, do **not** edit the new option
+manually. Read [audited accounting upgrade](runbook.md#audited-legacy-to-official-group-accounting-upgrade)
+and seek explicit operator approval. `npm run accounting:upgrade` is never
+an installation task; it requires downtime, an unused new UTC day, durable
+backups and externally verified Usage and Costs.

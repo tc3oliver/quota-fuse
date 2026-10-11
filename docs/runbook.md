@@ -90,6 +90,44 @@ request from **cross-day** blocking; it does not forgive billing, weaken
 same-day bounds or allow other unknown outcomes. Never fabricate a terminal
 timestamp to override the safety gate.
 
+## Audited legacy-to-official group-accounting upgrade
+
+**Fresh installations** already have `modelGroupAccounting: "official_v1"`.
+For an **existing** SQLite ledger that accounted all unlisted models as
+Premium, the upgrade must be explicit: abruptly reclassifying historical
+official usage as Economy would create false watermark errors.
+
+After independent review of the affected organization's Usage, Costs,
+and **all older UNKNOWN** outcomes, arrange a maintenance window **at
+the beginning of a new UTC day before the Collector has written any
+observations or clients have made any requests for that day**.
+(00:00 UTC = 08:00 Asia/Taipei.) Safely stop both Proxy and Collector,
+take durable SQLite and config backups, and document a detailed ticket.
+Do not attempt the command if today's baseline already exists; use
+another unobserved UTC day instead.
+
+```bash
+npm run accounting:upgrade -- operator-id \
+  'Audit record URL, reviewed prior-day reservations and terminal response evidence, verified official Usage and Costs, maintenance window, no new-day admission or collector baseline'
+```
+
+This command:
+1. Takes both instance locks and enters MANUAL_REVIEW.
+2. Requires the old fingerprint and no unresolved, unreviewed prior-day
+   reservations.
+3. Requires **zero** current-day or later reservations AND official observations.
+4. Transactionally changes only the policy fingerprint and writes a
+   `accounting_migration_audit` record; then atomically writes the updated
+   0600 `config.json`. History is never relabeled or erased.
+5. Requires starting the Collector first for new, group-aware official
+   baselines, checking Usage/Costs, and restarting Proxy only when safe.
+
+A crash between SQLite and config replacement intentionally leaves
+`POLICY_CHANGED` and PAUSED. Do **not** override the fingerprint or reset
+the ledger to recover. Inspect the audit record, then repair the configuration
+through reviewed operator procedures. Never run this automatically from
+Agent installation or from a scheduler.
+
 ## Checks
 
 ```bash
