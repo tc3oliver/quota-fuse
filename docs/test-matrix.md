@@ -27,3 +27,12 @@ All automated tests use mock upstream responses; no live billing calls are made.
 **Release classification:** `v0.1.1` OSS technical preview. **NO-GO production quota/billing assurance**, including unverified free counter billing. Do not interpret mock test passing as production activation approval.
 
 Admin usage and initial-day baseline are **conditionally trusted only**; no mock test verifies delayed upstream reporting. See [billing-validation.md](billing-validation.md).
+
+### Incomplete generation accounting
+
+Mock integration coverage includes valid `incomplete/max_output_tokens`
+terminal receipts for JSON, Responses SSE and Chat compatibility; strict
+usage validation, persisted incomplete settlement evidence, duplicate replay
+denial, bounded reservation overrun, malformed-stream UNKNOWN retention and
+legacy UNKNOWN immutability. This changes **future** accounting behavior only,
+not any existing production ledger row.
