@@ -106,7 +106,8 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
         // This larger byte-based bound is intentionally conservative and may deny
         // otherwise eligible very large agent contexts before upstream dispatch.
         const counterRequest: Record<string,unknown> = {model:approved.model,input:approved.input};
-        for (const field of ['instructions','tools','tool_choice','parallel_tool_calls','text'] as const)
+        // The counter accepts only input-affecting fields. parallel_tool_calls is a generation-only switch.
+        for (const field of ['instructions','tools','tool_choice','text'] as const)
           if (approved[field] !== undefined) counterRequest[field]=approved[field];
         const inputBytes = Buffer.byteLength(JSON.stringify(counterRequest));
         const provisionalInput = inputBytes * 8 + 4096;
@@ -148,6 +149,9 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           // Operator attestations and collector health can expire during preflight.
           // Revalidate before committing the generation-dispatch phase.
           gate(config, ledger, nowFn());
+          // A feature-specific audit may expire while preflight is in flight.
+          // Revalidate the original request before committing dispatch.
+          validateRequest(config, path, body, nowFn());
           ledger.prepareDispatch(config, key, inputTokens, maxOutput, nowFn());
           // Reusing only the server-provided approved values, never client auth headers.
           const upstream = await fetchImpl(config.upstream.baseUrl + '/responses', {
@@ -159,6 +163,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
             if (!upstream.body) throw new Error('No SSE body');
             res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-store', 'X-Request-ID': id, 'X-Accel-Buffering': 'no' });
             let buffer = '', completedUsage: number | null = null, sawComplete = false, finalResponse: Record<string,unknown> | null = null;
+            const chatToolIndices = new Map<number,number>();
             const decoder = new TextDecoder();
             for await (const chunk of upstream.body) {
               if (res.destroyed) throw new Error('Client disconnected');
@@ -183,7 +188,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
                 }
                 if (event === 'response.failed' || event === 'response.incomplete') throw new Error('Incomplete response');
                 if (clientMode === 'chat') {
-                  const delta = chatStreamDelta(event, data && data !== '[DONE]' ? JSON.parse(data) : null, approved.model as string);
+                  const delta = chatStreamDelta(event, data && data !== '[DONE]' ? JSON.parse(data) : null, approved.model as string, chatToolIndices);
                   if (delta && !res.write(delta)) await once(res, 'drain');
                 }
               }

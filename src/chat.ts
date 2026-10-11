@@ -36,7 +36,7 @@ export function chatResponse(raw: J): J {
       total_tokens:(usage.input_tokens as number)+(usage.output_tokens as number)}
   };
 }
-export function chatStreamDelta(event: string | undefined, data: unknown, model: string): string | null {
+export function chatStreamDelta(event: string | undefined, data: unknown, model: string, toolIndices: Map<number,number>): string | null {
   if (!obj(data)) return null;
   let delta: J | null=null;
   if (event==='response.created') delta={role:'assistant'};
@@ -45,12 +45,17 @@ export function chatStreamDelta(event: string | undefined, data: unknown, model:
     delta={content:data.delta};
   }
   if (event==='response.output_item.added' && obj(data.item) && data.item.type==='function_call') {
-    if (typeof data.output_index!=='number'||typeof data.item.call_id!=='string'||typeof data.item.name!=='string') throw new Error('Invalid streamed function call');
-    delta={tool_calls:[{index:data.output_index,id:data.item.call_id,type:'function',function:{name:data.item.name,arguments:''}}]};
+    if (!Number.isSafeInteger(data.output_index) || (data.output_index as number) < 0 ||
+        typeof data.item.call_id!=='string' || typeof data.item.name!=='string' || toolIndices.has(data.output_index as number))
+      throw new Error('Invalid streamed function call');
+    const index=toolIndices.size;
+    toolIndices.set(data.output_index as number,index);
+    delta={tool_calls:[{index,id:data.item.call_id,type:'function',function:{name:data.item.name,arguments:''}}]};
   }
   if (event==='response.function_call_arguments.delta') {
-    if (typeof data.output_index!=='number'||typeof data.delta!=='string') throw new Error('Invalid streamed arguments');
-    delta={tool_calls:[{index:data.output_index,function:{arguments:data.delta}}]};
+    if (!Number.isSafeInteger(data.output_index) || !toolIndices.has(data.output_index as number) ||
+        typeof data.delta!=='string') throw new Error('Invalid or unmatched streamed arguments');
+    delta={tool_calls:[{index:toolIndices.get(data.output_index as number),function:{arguments:data.delta}}]};
   }
   if (!delta) return null;
   return 'data: '+JSON.stringify({id:'chatcmpl-quota-fuse',object:'chat.completion.chunk',
