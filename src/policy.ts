@@ -25,7 +25,7 @@ export function classify(config: Config, model: unknown): Group {
 
 type ObjectValue = Record<string, unknown>;
 const record = (v: unknown): v is ObjectValue => v !== null && typeof v === 'object' && !Array.isArray(v);
-const fail = (msg: string): never => { throw new Denial(403, 'PAID_FEATURE_BLOCKED', msg); };
+function fail(msg: string): never { throw new Denial(403, 'PAID_FEATURE_BLOCKED', msg); }
 function keys(obj: ObjectValue, allowed: readonly string[], where: string): void {
   for (const key of Object.keys(obj)) if (!allowed.includes(key)) fail('Unsupported ' + where + ' parameter: ' + key);
 }
