@@ -120,3 +120,18 @@ test('existing current-day official baseline prevents group reclassification',()
    assert.doesNotThrow(()=>l.verifyPolicy(c));
  }finally{l.close();}
 });
+
+test('manual review entry does not erase an existing critical collector pause',()=>{
+ const l=new Ledger(':memory:');
+ try {
+   l.setPause('UNACCOUNTED_OFFICIAL_USAGE');
+   l.enterManualReview();
+   assert.equal(l.pauseReason(),'UNACCOUNTED_OFFICIAL_USAGE');
+   l.setPause('ANCHOR_UNVERIFIED');
+   l.enterManualReview();
+   assert.equal(l.pauseReason(),'ANCHOR_UNVERIFIED');
+   l.setPause(null);
+   l.enterManualReview();
+   assert.equal(l.pauseReason(),'MANUAL_REVIEW');
+ }finally{l.close();}
+});

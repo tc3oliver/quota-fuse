@@ -34,7 +34,7 @@ try{
   release.push(acquireInstanceLock(current.server.storage,'collector'));
   ledger=new Ledger(current.server.storage,{recoverPending:false});
   ledger.verifyPolicy(current);
-  ledger.setPause('MANUAL_REVIEW');
+  ledger.enterManualReview();
   const temp=path+'.upgrade-'+randomUUID();
   try{
     writeFileSync(temp,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});

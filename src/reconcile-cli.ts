@@ -24,7 +24,7 @@ if (!key || !operator || !(preflight || dispatched) ||
     try {
       ledger.verifyPolicy(config);
       // Maintenance stop; distinct audited operations, no implicit unpause.
-      ledger.setPause('MANUAL_REVIEW');
+      ledger.enterManualReview();
       if (preflight) {
         ledger.reconcilePreflight(key, operator, evidence);
         console.log('Preflight-only UNKNOWN reconciled; review audit trail before restarting collector.');

@@ -44,8 +44,13 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
         for (const row of bucket.results) {
           // Unknown/other project usage may consume the same organization-level incentive: pause.
           if (!row || row.project_id !== config.dataSharing.projectId || typeof row.model !== 'string') throw new Error('Unattributed or side-channel usage detected');
-          // Mirror admission accounting when no model-to-tier mapping exists.
-          const group = openMode ? (config.dataSharing.modelGroupAccounting === 'official_v1' ? groupForUnrestrictedModel(row.model) : 'premium') : groups.get(row.model);
+          // Mirror Proxy exactly: the whitelist is only an admission filter
+          // under official_v1; group accounting comes from the official ID map.
+          // Legacy configurations retain their original operator-supplied groups.
+          const group = !openMode && !groups.has(row.model) ? undefined
+            : config.dataSharing.modelGroupAccounting === 'official_v1'
+              ? groupForUnrestrictedModel(row.model)
+              : openMode ? 'premium' : groups.get(row.model);
           if (!group) throw new Error('Model outside the optional whitelist observed in org usage');
           if (!whole(row.input_tokens) || !whole(row.output_tokens)) throw new Error('Untrustworthy official token count');
           sums[group] += row.input_tokens + row.output_tokens;

@@ -138,6 +138,11 @@ export class Ledger {
   setPause(reason: string | null): void {
     this.tx(() => this.db.prepare('UPDATE guard_control SET paused_reason=? WHERE id=1').run(reason));
   }
+  /** Maintenance may pause a READY ledger, but must never erase a pre-existing
+   * collector failure or an operator hold (including on a failed audit). */
+  enterManualReview(): void {
+    this.tx(() => this.db.prepare("UPDATE guard_control SET paused_reason='MANUAL_REVIEW' WHERE id=1 AND paused_reason IS NULL").run());
+  }
   observation(day: string, group: Group): { official_high_watermark: number; anchor_tokens: number | null; reconciled_at: string } | undefined {
     return this.db.prepare('SELECT official_high_watermark, anchor_tokens, reconciled_at FROM observations WHERE utc_day=? AND group_name=?').get(day, group) as any;
   }

@@ -65,7 +65,12 @@ npm run onboard -- --allow-all
 ```
 
 Once either list contains model IDs, both lists together form a strict
-whitelist. No wildcard paid-model fallback is added by QuotaFuse. Never
+whitelist. With `official_v1`, the two lists control **permission only**:
+the published exact-ID map always determines which daily token group is
+charged. Placing a Premium ID in the Economy list will not give it the larger
+Economy budget. Unknown IDs still fall back to Premium and can incur charges.
+Legacy unversioned ledgers preserve their existing operator-selected groups.
+No wildcard paid-model fallback is added by QuotaFuse. Never
 delete an existing SQLite ledger to bypass `POLICY_CHANGED` or `UNKNOWN`;
 policy changes require operator reconciliation.
 

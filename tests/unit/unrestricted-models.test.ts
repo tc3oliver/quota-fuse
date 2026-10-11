@@ -30,6 +30,40 @@ test('populated whitelist is strict; approved economy models retain economy budg
  assert.throws(()=>classify(c,'gpt-test-2026-10-11'),(e:any)=>e.code==='MODEL_NOT_ELIGIBLE');
 });
 
+test('official_v1 separates model allowlisting from billing group for both group lists',()=>{
+ const c=cfg();
+ c.dataSharing.modelGroupAccounting='official_v1';
+ c.quotas.premium.models=['gpt-4.1-mini-2025-04-14'];
+ c.quotas.economy.models=['gpt-6-sol','unknown-potentially-billable'];
+ assert.equal(classify(c,'gpt-4.1-mini-2025-04-14'),'economy','documented Economy must stay Economy even in the Premium filter');
+ assert.equal(classify(c,'gpt-6-sol'),'premium','documented Premium must not receive Economy allowance');
+ assert.equal(classify(c,'unknown-potentially-billable'),'premium','unknown allowed IDs get the smaller budget');
+ assert.throws(()=>classify(c,'gpt-5.6-terra'),(e:any)=>e.code==='MODEL_NOT_ELIGIBLE','strict allowlist still denies other documented IDs');
+});
+
+test('collector uses the same official group map despite deliberately reversed allowlist labels',async()=>{
+ const c=cfg();
+ c.dataSharing.modelGroupAccounting='official_v1';
+ c.quotas.premium.models=['gpt-4.1-mini-2025-04-14'];
+ c.quotas.economy.models=['gpt-6-sol'];
+ const now=new Date('2026-10-11T12:00:00Z');
+ const today=Math.floor(Date.parse('2026-10-11T00:00:00Z')/1000);
+ const end=Math.floor(now.getTime()/1000);
+ const fetchImpl=(async()=>new Response(JSON.stringify({
+   object:'page',
+   data:[{object:'bucket',start_time:today,end_time:end,results:[
+     {project_id:'proj_test',model:'gpt-6-sol',input_tokens:12,output_tokens:8},
+     {project_id:'proj_test',model:'gpt-4.1-mini-2025-04-14',input_tokens:4,output_tokens:3}
+   ]}],
+   has_more:false
+ }),{status:200})) as typeof fetch;
+ const ledger=new Ledger(':memory:');
+ try {
+   assert.deepEqual(await collectOnce(c,ledger,{fetchImpl,now,adminKey:'mock-admin-key'}),{premium:20,economy:7});
+   assert.equal(ledger.pauseReason(),null);
+ }finally{ledger.close();}
+});
+
 test('unrestricted models do not bypass unverified policy/attestation gates',()=>{
  const c=cfg();
  c.quotas.premium.models=[];c.quotas.economy.models=[];
