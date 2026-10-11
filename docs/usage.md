@@ -41,7 +41,7 @@ Stateless Responses requests may include text message arrays with roles `system`
 
 Local Agent functions use Responses `tools` with `type:"function"`, plus `function_call` and `function_call_output` items across turns. The Agent executes its own Bash, files, git and MCP tools; QuotaFuse never executes tools. OpenAI-hosted tools and remote MCP are always rejected.
 
-**Function Calling eligibility is not established:** OpenAI's complimentary Data Sharing terms exclude tool use. To prevent unexpected charges, `policy.localFunctionsVerified` and `policy.localFunctionsAttestedUntil` are **false/null by default**. Operators must privately establish account-specific eligibility and costs before enabling. No automatic enablement is permitted.
+**Billing distinction:** Calling a function executed by your Agent does not itself incur a separate OpenAI Hosted Tool execution fee. Function declarations and model-generated arguments use ordinary model tokens. **Whether these tokens qualify for the Data Sharing incentive remains unconfirmed**, because the offer excludes “tool use” without specifying local Function Calling. QuotaFuse accepts client-side function declarations without an extra feature gate, but this is not proof of zero cost; the normal Data Sharing eligibility, preflight, quota and Costs checks remain in effect. Use only public data and do not assume that quota admission guarantees a free bill.
 
 JSON object/schema output formats have separate default-off `structuredTextVerified` / `structuredTextAttestedUntil` gates pending format-specific billing audit. These safety gates require explicit policy review and a compatible SQLite policy fingerprint.
 

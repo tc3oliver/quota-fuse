@@ -21,8 +21,6 @@ export interface Config {
     manualCostsAuditedUntil: string | null; reconcileMaxAgeSeconds: number;
     /** Format-specific audit, distinct from general token incentive enrollment. */
     structuredTextVerified?: boolean; structuredTextAttestedUntil?: string | null;
-    /** Self-hosted agent functions are still API tool use and are opt-in ONLY after billing evidence. */
-    localFunctionsVerified?: boolean; localFunctionsAttestedUntil?: string | null;
   };
   quotas: Record<Group, { dailyTokens: number; models: string[] }>;
 }
@@ -57,11 +55,11 @@ export function validateConfig(c: Config): Config {
       seen.add(model);
     }
   }
-  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil', 'structuredTextAttestedUntil', 'localFunctionsAttestedUntil'] as const) {
+  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil', 'structuredTextAttestedUntil'] as const) {
     const val = c.policy[prop];
     if (val !== null && val !== undefined && (typeof val !== 'string' || !Number.isFinite(Date.parse(val)))) throw new Error('Invalid attestation timestamp: ' + prop);
   }
-  for (const feature of ['structuredTextVerified', 'localFunctionsVerified'] as const)
+  for (const feature of ['structuredTextVerified'] as const)
     if (c.policy[feature] !== undefined && typeof c.policy[feature] !== 'boolean') throw new Error('Invalid feature gate ' + feature);
   return c;
 }

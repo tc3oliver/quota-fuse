@@ -24,8 +24,6 @@
     "exclusiveOrgTrafficAttestedUntil": null,
     "manualCostsAuditedUntil": null,
     "reconcileMaxAgeSeconds": 600,
-    "localFunctionsVerified": false,
-    "localFunctionsAttestedUntil": null,
     "structuredTextVerified": false,
     "structuredTextAttestedUntil": null
   },

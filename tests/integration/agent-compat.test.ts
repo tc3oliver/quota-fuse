@@ -16,10 +16,9 @@ const textOutput=(message='ok')=>({id:'resp_123',model,status:'completed',
 const callOutput=()=>({id:'resp_call',model,status:'completed',
   output:[{type:'function_call',id:'fc_01',call_id:'call_001',name:'read_file',arguments:'{"path":"a.ts"}'}],
   usage:{input_tokens:35,output_tokens:18}});
-async function start(opts: {functions?: boolean;structured?: boolean;mode?: 'text'|'call'|'stream'}={}) {
+async function start(opts: {structured?: boolean;mode?: 'text'|'call'|'stream'}={}) {
   const c=cfg();
   const future=new Date(Date.now()+1000*60*60).toISOString();
-  if(opts.functions) {c.policy.localFunctionsVerified=true;c.policy.localFunctionsAttestedUntil=future;}
   if(opts.structured) {c.policy.structuredTextVerified=true;c.policy.structuredTextAttestedUntil=future;}
   const l=verifiedLedger();
   const seen:{url:string,body:any}[]=[];
@@ -60,7 +59,7 @@ test('stateless multi-turn text and content arrays go into the complete prefligh
   } finally {await h.close();}
 });
 test('hosted tools and image/audio blocks are denied without upstream calls',async()=>{
-  const h=await start({functions:true});
+  const h=await start({});
   try {
     assert.equal((await send(h.base,{model,input:'hello',tools:[{type:'web_search'}],max_output_tokens:64})).status,403);
     assert.equal((await send(h.base,{model,input:[{role:'user',content:[{type:'input_image',image_url:'https://x'}]}],max_output_tokens:64})).status,403);
@@ -68,18 +67,18 @@ test('hosted tools and image/audio blocks are denied without upstream calls',asy
     assert.equal(h.seen.length,0);
   } finally {await h.close();}
 });
-test('native local functions require independently audited billing gate',async()=>{
+test('native local functions are supported without a separate feature attestation',async()=>{
   const h=await start();
   try {
     const body={model,input:'hello',max_output_tokens:64,tools:[{type:'function',name:'read_file',parameters:{type:'object',properties:{}},strict:true}]};
     const r=await send(h.base,body);
-    assert.equal(r.status,503);
-    assert.equal((await r.json()).error.code,'FREE_QUOTA_UNVERIFIED');
-    assert.equal(h.seen.length,0);
+    assert.equal(r.status,200);
+    assert.equal(h.seen.length,2);
+    assert.equal(h.seen[0].body.tools[0].name,'read_file');
   } finally {await h.close();}
 });
 test('local function schema and tool result round trip with bounded preflight',async()=>{
-  const h=await start({functions:true,mode:'call'});
+  const h=await start({mode:'call'});
   const tools=[{type:'function',name:'read_file',description:'Read local public file',parameters:{type:'object',properties:{path:{type:'string'}},required:['path'],additionalProperties:false},strict:true}];
   try {
     let r=await send(h.base,{model,input:'Which file?',max_output_tokens:128,tools,tool_choice:'auto',parallel_tool_calls:true});
@@ -90,7 +89,7 @@ test('local function schema and tool result round trip with bounded preflight',a
     assert.equal(h.seen[0].body.tool_choice,'auto');
     assert.equal(h.seen[1].body.tools[0].name,'read_file');
   }finally{await h.close();}
-  const next=await start({functions:true});
+  const next=await start({});
   try {
     const input=[{role:'user',content:'Which file?'},{type:'function_call',name:'read_file',call_id:'call_001',arguments:'{"path":"a.ts"}'},
       {type:'function_call_output',call_id:'call_001',output:'export const x = 1;'}, {role:'user',content:'Summarize it'}];
@@ -135,7 +134,7 @@ test('Chat Completions maps to Responses, returns Chat JSON and streaming SSE',a
   }
 });
 test('Chat local tool results map to function_call_output, hosted tools reject',async()=>{
-  const h=await start({functions:true,mode:'call'});
+  const h=await start({mode:'call'});
   const tools=[{type:'function',function:{name:'read_file',parameters:{type:'object',properties:{},additionalProperties:false},strict:true}}];
   try {
     const msg={model,messages:[{role:'user',content:'read'}],tools,max_completion_tokens:128};
@@ -149,7 +148,7 @@ test('Chat local tool results map to function_call_output, hosted tools reject',
 });
 
 test('external JSON schema reference and unsupported chat function mode are rejected',async()=>{
-  const h=await start({structured:true,functions:true});
+  const h=await start({structured:true,});
   try {
     const external={model,input:'json please',max_output_tokens:64,
       text:{format:{type:'json_schema',name:'Unsafe',strict:true,schema:{type:'object',properties:{x:{$ref:'https://example.com/schema.json'}}}}}};

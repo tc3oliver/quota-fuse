@@ -1,7 +1,7 @@
 ## Unreleased
 
 - Add stateless multi-turn Responses text and bounded Chat text compatibility via Responses preflight.
-- Add local function call/output and structured JSON support with default-deny billing gates. Hosted tools remain blocked.
+- Add client-owned function call/output support under existing quota gates; structured JSON retains a separate, default-off billing gate. Hosted tools remain blocked.
 
 - Add an idempotent `npm run setup` to create private config and separate proxy/collector credentials, plus local start/status scripts.
 - Rewrite README for installation and end users; move development details to `docs/development.md` and add deployment/API guides.

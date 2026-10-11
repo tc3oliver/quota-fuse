@@ -34,12 +34,10 @@ function boundedText(v: unknown, what: string, allowEmpty = false): string {
   return v as string;
 }
 const functionName = (v: unknown): v is string => typeof v === 'string' && /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/.test(v);
-function audited(config: Config, feature: 'localFunctions' | 'structuredText', now: Date): void {
-  const p = config.policy;
-  const enabled = feature === 'localFunctions' ? p.localFunctionsVerified : p.structuredTextVerified;
-  const until = feature === 'localFunctions' ? p.localFunctionsAttestedUntil : p.structuredTextAttestedUntil;
-  if (enabled !== true || !attestedUntil(until ?? null, now))
-    throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', feature + ' billing eligibility has not been independently verified');
+function structuredTextAudited(config: Config, now: Date): void {
+  if (config.policy.structuredTextVerified !== true ||
+      !attestedUntil(config.policy.structuredTextAttestedUntil ?? null, now))
+    throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', 'Structured output billing has not been independently verified');
 }
 function schema(value: unknown, label: string): ObjectValue {
   if (!record(value) || value.type !== 'object') fail(label + ' requires an object JSON schema');
@@ -63,7 +61,7 @@ function textFormat(config: Config, v: unknown, now: Date): ObjectValue {
   if (!record(v.format)) fail('Missing text.format');
   const f = v.format;
   if (f.type === 'text') { keys(f, ['type'], 'text.format'); return {format:{type:'text'}}; }
-  audited(config, 'structuredText', now);
+  structuredTextAudited(config, now);
   if (f.type === 'json_object') { keys(f, ['type'], 'text.format'); return {format:{type:'json_object'}}; }
   if (f.type === 'json_schema') {
     keys(f, ['type','name','schema','strict','description'], 'text.format');
@@ -87,9 +85,7 @@ function validateFunctionTools(config: Config, input: unknown, now: Date): Objec
     if (tool.parameters !== undefined) schema(tool.parameters, 'function parameters');
     return tool as ObjectValue;
   });
-  // Always reject hosted/remote tool kinds before checking the separately
-  // attested local-function entitlement, so unsupported features stay 403.
-  audited(config,'localFunctions',now);
+  // Client function declarations are regular model input; QuotaFuse does not execute them.
   return validated;
 }
 function validatedInput(config: Config, input: unknown, now: Date): unknown {
@@ -99,7 +95,7 @@ function validatedInput(config: Config, input: unknown, now: Date): unknown {
   return input.map((item: unknown) => {
     if (!record(item)) fail('Input item must be an object');
     if (item.type === 'function_call' || item.type === 'function_call_output') {
-      audited(config,'localFunctions',now);
+      
       if (item.type === 'function_call') {
         keys(item,['type','name','call_id','arguments','id','status'],'function_call');
         if (!functionName(item.name) || typeof item.call_id !== 'string' || item.call_id.length > 256 || !item.call_id || calls.has(item.call_id)) fail('Invalid function_call');
@@ -116,7 +112,7 @@ function validatedInput(config: Config, input: unknown, now: Date): unknown {
       return item;
     }
     if (item.type === 'reasoning') {
-      audited(config,'localFunctions',now);
+      
       keys(item,['type','id','encrypted_content','summary'],'reasoning');
       boundedText(item.id, 'reasoning id');
       boundedText(item.encrypted_content,'encrypted reasoning');
@@ -213,7 +209,7 @@ export function validateRequest(config: Config, endpoint: string, raw: unknown, 
   if (req.store !== undefined && req.store !== false) fail('Stored responses are disabled');
   if (req.text !== undefined) approved.text=textFormat(config,req.text,now);
   if (req.include !== undefined) {
-    audited(config,'localFunctions',now);
+    
     if (!Array.isArray(req.include) || req.include.length !== 1 || req.include[0] !== 'reasoning.encrypted_content')
       fail('Only reasoning.encrypted_content include supported');
     approved.include=req.include;

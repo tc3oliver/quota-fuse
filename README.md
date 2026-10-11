@@ -135,7 +135,7 @@ Base URL: http://127.0.0.1:8787/v1
 Auth:      Bearer <QG_PROXY_TOKEN from .env.proxy>
 ```
 
-QuotaFuse supports **stateless multi-turn text** with Responses and a bounded **Chat Completions** adapter (JSON/SSE). Client-defined functions and structured JSON formats are implemented but remain **disabled until separately audited for Data Sharing billing**. Hosted tools, remote MCP, image/audio, and stored conversations stay blocked. All requests require a stable `Idempotency-Key`, public-data classification and an explicit output cap. See [supported formats and capability gates](docs/usage.md).
+QuotaFuse supports **stateless multi-turn text** with Responses and a bounded **Chat Completions** adapter (JSON/SSE). Client-defined local functions are supported under the normal request and quota gates; structured JSON formats retain a separate audit gate. Hosted tools, remote MCP, image/audio, and stored conversations stay blocked. All requests require a stable `Idempotency-Key`, public-data classification and an explicit output cap. See [supported formats and capability gates](docs/usage.md).
 
 ## Guides
 
