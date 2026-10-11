@@ -1,10 +1,13 @@
 import type { Config, Group } from './config.ts';
 import { utcDay } from './config.ts';
-import { Ledger } from './ledger.ts';
+import { Ledger, LedgerError } from './ledger.ts';
 
 export interface CollectOptions { fetchImpl?: typeof fetch; now?: Date; adminKey?: string }
 function whole(v: unknown): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0; }
+const reviewRequired = new Set(['ACTUAL_EXCEEDS_RESERVED', 'UNACCOUNTED_OFFICIAL_USAGE', 'OFFICIAL_WATERMARK_REGRESSION', 'ANCHOR_UNVERIFIED']);
 export async function collectOnce(config: Config, ledger: Ledger, options: CollectOptions = {}): Promise<Record<Group,number>> {
+  // Successful polling must never erase an accounting-invariant failure.
+  if (reviewRequired.has(ledger.pauseReason() ?? '')) throw new Error('Manual operator review required before collector may resume');
   ledger.setPause('COLLECTOR_REFRESHING');
   try {
     const key = options.adminKey ?? process.env.OPENAI_ADMIN_KEY;
@@ -59,7 +62,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
     throw new Error('Pagination safety cap reached');
   } catch (e) {
     // Set/preserve paused state even for mid-pagination or authentication failures.
-    try { ledger.setPause('COLLECTOR_UNVERIFIED'); } catch { /* DB failures already fail closed */ }
+    try { ledger.setPause(e instanceof LedgerError && reviewRequired.has(e.code) ? e.code : 'COLLECTOR_UNVERIFIED'); } catch { /* DB failures already fail closed */ }
     throw e;
   }
 }

@@ -36,7 +36,7 @@ test('settlement releases excess reservation only with complete usage',()=> {
 });
 test('actual usage above reservation keeps unknown allocation',()=> {
   const l=verifiedLedger(),c=cfg();reserve(l,c,100,'bad');
-  assert.throws(()=>l.complete('bad',101));assert.equal(l.find('bad')?.state,'UNKNOWN');l.close();
+  assert.throws(()=>l.complete('bad',101));assert.equal(l.find('bad')?.state,'UNKNOWN');assert.equal(l.isPaused(),true);l.close();
 });
 test('uncertain upstream outcomes never release reserves',()=> {
   const l=verifiedLedger(),c=cfg();reserve(l,c,100,'unknown');l.unknown('unknown');
@@ -47,7 +47,7 @@ test('duplicate idempotency key denies replay including completed',()=> {
   assert.throws(()=>reserve(l,c,100,'same'),(e:any)=>e.code==='DUPLICATE_REQUEST');l.close();
 });
 test('watermark regression is rejected, remaining unchanged',()=> {
-  const l=verifiedLedger(),c=cfg();l.recordObservation(day,'premium',1000);
+  const l=new Ledger(':memory:'),c=cfg();l.recordObservation(day,'premium',1000);
   assert.throws(()=>l.recordObservation(day,'premium',999),(e:any)=>e.code==='OFFICIAL_WATERMARK_REGRESSION');
   assert.equal(l.snapshot(c,day,'premium').official_observed,1000);l.close();
 });
@@ -120,7 +120,7 @@ test('cannot establish a late baseline after any local admitted request',()=> {
   const tomorrow='2026-12-31';
   // Existing verified baseline is not reset even if a new official value arrives.
   reserve(l,c,100,'one');
-  l.recordObservation(day,'premium',500);
+  l.recordObservation(day,'premium',50);
   assert.equal(l.observation(day,'premium')?.anchor_tokens,0);
   // Simulate a missing-first-observation for an already admitted group on another day.
   l.db.prepare('INSERT INTO reservations(idempotency_key,request_id,body_hash,model,group_name,utc_day,reserved,actual,state,admitted_at,updated_at,phase) VALUES(?,?,?,?,?,?,?,NULL,?,?,?,?)')
@@ -188,4 +188,12 @@ test('read-only quota access never migrates, recovers, or modifies pending reser
     const verify=new Ledger(path,{recoverPending:false});
     assert.equal(verify.find('inflight')?.state,'PENDING');verify.close();
   }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('unexpected official usage beyond baseline plus local upper bound is rejected',()=>{
+ const l=verifiedLedger(),c=cfg();
+ reserve(l,c,100,'only-local-traffic');
+ assert.throws(()=>l.recordObservation(day,'premium',101),(e:any)=>e.code==='UNACCOUNTED_OFFICIAL_USAGE');
+ assert.equal(l.observation(day,'premium')?.official_high_watermark,0);
+ l.close();
 });

@@ -52,3 +52,28 @@ test('empty official usage page is not trusted as zero usage', async()=> {
     assert.equal(l.observation(new Date().toISOString().slice(0,10),'premium'),undefined);
   } finally {l.close();}
 });
+
+test('unaccounted official usage pauses collector persistently',async()=>{
+ const l=new Ledger(':memory:'),c=cfg();
+ const day=new Date().toISOString().slice(0,10);
+ l.recordObservation(day,'premium',0);l.recordObservation(day,'economy',0);l.setPause(null);
+ const fake=(async()=>new Response(JSON.stringify(page([row(c.quotas.premium.models[0],1)])))) as typeof fetch;
+ try{
+  await assert.rejects(()=>collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'}),/Official reading exceeds/);
+  assert.equal(l.pauseReason(),'UNACCOUNTED_OFFICIAL_USAGE');
+  assert.equal(l.observation(day,'premium')?.official_high_watermark,0);
+  await assert.rejects(()=>collectOnce(c,l,{fetchImpl:(async()=>{throw new Error('must not query');}) as typeof fetch,adminKey:'test-admin'}),/Manual operator review required/);
+  assert.equal(l.pauseReason(),'UNACCOUNTED_OFFICIAL_USAGE');
+ }finally{l.close();}
+});
+test('collector cannot clear breached per-request usage bound',async()=>{
+ const l=new Ledger(':memory:'),c=cfg(),day=new Date().toISOString().slice(0,10);
+ try{
+  l.recordObservation(day,'premium',0);l.recordObservation(day,'economy',0);l.setPause(null);
+  l.admit(c,{key:'excess',hash:'h',requestId:'r',model:c.quotas.premium.models[0],group:'premium',day,reserve:10});
+  assert.throws(()=>l.complete('excess',11));
+  assert.equal(l.pauseReason(),'ACTUAL_EXCEEDS_RESERVED');
+  await assert.rejects(()=>collectOnce(c,l,{adminKey:'fake',fetchImpl:(async()=>{throw new Error('unexpected request');}) as typeof fetch}),/Manual operator review required/);
+  assert.equal(l.pauseReason(),'ACTUAL_EXCEEDS_RESERVED');
+ }finally{l.close();}
+});

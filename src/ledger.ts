@@ -75,7 +75,8 @@ export class Ledger {
       }
     });
   }
-  isPaused(): boolean { return !!(this.db.prepare('SELECT paused_reason FROM guard_control WHERE id=1').get() as any).paused_reason; }
+  pauseReason(): string | null { return (this.db.prepare('SELECT paused_reason FROM guard_control WHERE id=1').get() as {paused_reason:string|null}).paused_reason; }
+  isPaused(): boolean { return this.pauseReason() !== null; }
   setPause(reason: string | null): void {
     this.tx(() => this.db.prepare('UPDATE guard_control SET paused_reason=? WHERE id=1').run(reason));
   }
@@ -93,6 +94,14 @@ export class Ledger {
         if (present.n) throw new LedgerError('ANCHOR_UNVERIFIED', 'Cannot initialize a baseline after local requests were admitted');
       }
       if (at.getTime() > Date.now() + 5000) throw new LedgerError('CLOCK_SKEW', 'Future collector checkpoint');
+      if (old) {
+        // Every token after a verified exclusive-traffic baseline must fit
+        // within locally settled requests or outstanding upper bounds.
+        const { settled, outstanding } = this.usage(day, group);
+        const knownUpperBound = old.anchor_tokens! + settled + outstanding;
+        if (!Number.isSafeInteger(knownUpperBound) || tokens > knownUpperBound)
+          throw new LedgerError('UNACCOUNTED_OFFICIAL_USAGE', 'Official reading exceeds verified baseline plus local upper bound');
+      }
       this.db.prepare(`INSERT INTO observations(utc_day,group_name,official_high_watermark,anchor_tokens,reconciled_at) VALUES(?,?,?,?,?)
         ON CONFLICT(utc_day,group_name) DO UPDATE SET official_high_watermark=excluded.official_high_watermark,reconciled_at=excluded.reconciled_at`)
         .run(day, group, tokens, tokens, at.toISOString());
@@ -196,7 +205,9 @@ export class Ledger {
       if (!r || r.state !== 'PENDING') throw new LedgerError('INVALID_TRANSITION', 'Cannot settle nonpending reservation');
       if (actual > r.reserved) {
         this.db.prepare("UPDATE reservations SET state='UNKNOWN',updated_at=? WHERE idempotency_key=?").run(new Date().toISOString(), key);
-        // Commit UNKNOWN, then refuse claims of trusted settlement to the caller.
+        // A breached usage bound invalidates further admissions until manual review.
+        this.db.prepare("UPDATE guard_control SET paused_reason='ACTUAL_EXCEEDS_RESERVED' WHERE id=1").run();
+        // Commit UNKNOWN and PAUSED together, then report the failure.
         return;
       }
       this.db.prepare("UPDATE reservations SET state='COMPLETED',actual=?,updated_at=? WHERE idempotency_key=?")

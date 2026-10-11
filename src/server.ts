@@ -138,6 +138,9 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           if (utcDay(nowFn()) !== reservation.utc_day) throw new Error('UTC rollover during preflight');
           // The state transition commits BEFORE attempting the generation request.
           // Any later failure remains UNKNOWN; unconsumed provisional capacity is released.
+          // Operator attestations and collector health can expire during preflight.
+          // Revalidate before committing the generation-dispatch phase.
+          gate(config, ledger, nowFn());
           ledger.prepareDispatch(config, key, inputTokens, maxOutput, nowFn());
           // Reusing only the server-provided approved values, never client auth headers.
           const upstream = await fetchImpl(config.upstream.baseUrl + path.slice(3), {
@@ -164,6 +167,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
                 const data = frame.split(/\r?\n/).filter(s => s.startsWith('data:')).map(s => s.slice(5).trimStart()).join('\n');
                 if (event === 'response.completed') {
                   const parsed = JSON.parse(data);
+                  if (parsed.response?.status !== 'completed') throw new Error('Unverified terminal response status');
                   completedUsage = parseUsage(parsed.response, path); sawComplete = true;
                 }
                 if (event === 'response.failed' || event === 'response.incomplete') throw new Error('Incomplete response');
@@ -177,6 +181,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           } else {
             const text = await readLimited(upstream, 8 * 1024 * 1024);
             const parsed = JSON.parse(text);
+            if (parsed?.status !== 'completed') throw new Error('Upstream response is not completed');
             const usage = parseUsage(parsed, path);
             if (usage === null) throw new Error('Provider missing complete usage');
             ledger.complete(key, usage);

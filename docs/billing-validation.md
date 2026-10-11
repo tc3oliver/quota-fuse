@@ -18,7 +18,7 @@ The **first official observation** for a UTC day/group becomes a baseline only i
 
 This fixes the `MAX(official, local)` undercount when official traffic predates local requests, without automatically double-counting local usage once the official number catches up.
 
-**Preconditions:** the baseline covers all preceding relevant usage (the Admin API may lag), the affected organization has **no eligible bypass traffic after that baseline**, the entire usage read is complete and the versioned-model mapping actually matches the user's offer. The operator must independently verify the baseline through Dashboard and isolate bypass traffic. The Admin API **cannot prove** these conditions itself. If unsure, **NO-GO** and keep the Proxy paused. Delayed pre-baseline usage can invalidate an assumed baseline; there is no official real-time Data Sharing reservation API.
+**Preconditions:** the baseline covers all preceding relevant usage (the Admin API may lag), the affected organization has **no eligible bypass traffic after that baseline**, the entire usage read is complete and the versioned-model mapping actually matches the user's offer. The collector enters a sticky manual-review pause if later official usage exceeds the baseline plus all locally settled and reserved upper bounds. Smaller delayed or bypass usage masked by already settled local tokens cannot be detected by this check. The operator must independently verify the baseline through Dashboard and isolate bypass traffic. The Admin API **cannot prove** these conditions itself. If unsure, **NO-GO** and keep the Proxy paused. Delayed pre-baseline usage can invalidate an assumed baseline; there is no official real-time Data Sharing reservation API.
 
 Legacy checkpoint rows are upgraded with a `NULL` baseline and **remain unverified**, rather than guessed from later measurements. Wait until a new, clean UTC day with no cross-day uncertainty or conduct an externally reviewed ledger migration. Never delete an existing ledger to bypass uncertainty.
 
@@ -50,3 +50,5 @@ Official references:
 - https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai
 - https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions
 - https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
+
+Accounting invariant failures (`UNACCOUNTED_OFFICIAL_USAGE`, `ACTUAL_EXCEEDS_RESERVED`, watermark regression) cannot be cleared by a successful collector refresh. They require a separately reviewed recovery; v0.1 has no automatic recovery pathway.
