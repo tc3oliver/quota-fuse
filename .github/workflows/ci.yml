@@ -20,4 +20,21 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run check
+      - run: npm run setup
+      - name: Smoke test local deployment (no API requests)
+        shell: bash
+        run: |
+          node --env-file=.env.proxy --input-type=module -e "if (!process.env.QG_PROXY_TOKEN || process.env.OPENAI_ADMIN_KEY) process.exit(1)"
+          node --env-file=.env.collector --input-type=module -e "if (!('OPENAI_ADMIN_KEY' in process.env) || process.env.OPENAI_API_KEY) process.exit(1)"
+          node --env-file=.env.proxy --disable-warning=ExperimentalWarning --experimental-strip-types src/main.ts > /tmp/quota-fuse-smoke.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          ready=0
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:8787/health/live > /dev/null; then ready=1; break; fi
+            sleep 0.25
+          done
+          if [[ "$ready" -ne 1 ]]; then cat /tmp/quota-fuse-smoke.log; exit 1; fi
+          npm run status:local | tee /tmp/quota-fuse-status.log
+          grep -q 'Admission: PAUSED (fail-closed)' /tmp/quota-fuse-status.log
       - run: git diff --check

@@ -4,6 +4,8 @@
 
 Run Node.js 22.13 or later (prefer exactly pinned environment). Copy `config.example.json` to ignored `config.json`. Configure `dataSharing.projectId`, the verified org `dataSharing.tier`, and per-group limits as in [configuration guide](data-sharing-configuration.md). A brand-new install is paused until verification; do not use default placeholder IDs in real requests. Store secrets outside the repository and avoid long-lived admin credentials on developer desktops when possible.
 
+Use `npm run setup` to generate `config.json`, `.env.proxy` and `.env.collector`; then use `npm run start:local` and `npm run collector:local` in separate terminals. See [deployment](deployment.md) for the user workflow.
+
 Keep the proxy and usage collector as **distinct processes and credentials**. The proxy refuses to boot when `OPENAI_ADMIN_KEY` is present, and the collector refuses to boot when `OPENAI_API_KEY` is present. This stops an accidental shared environment, not a privileged OS adversary.
 
 ```bash

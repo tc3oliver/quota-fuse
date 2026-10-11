@@ -1,125 +1,149 @@
 # QuotaFuse
 
-**A fail-closed quota firewall for LLM APIs.**
+**Keep OpenAI Data Sharing API usage within a conservative token budget.**
 
 [![CI](https://github.com/tc3oliver/quota-fuse/actions/workflows/ci.yml/badge.svg)](https://github.com/tc3oliver/quota-fuse/actions/workflows/ci.yml)
-![License](https://img.shields.io/badge/license-Apache--2.0-blue)
-![Status](https://img.shields.io/badge/status-v0.1%20experimental-orange)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-QuotaFuse is an OpenAI-compatible reverse proxy that **refuses uncertain or potentially chargeable requests rather than silently using paid API tokens**. It tracks guarded capacity with atomic SQLite reservations, a separate Admin Usage API collector, and persistent unknown-outcome accounting. Intended as a bounded provider beneath a *separate* routing layer such as OMP or Pi.
+QuotaFuse is a local OpenAI-compatible proxy for **OpenAI Data Sharing complimentary tokens**. It reserves capacity before a request, tracks completed and uncertain usage in SQLite, checks organization usage through a separate collector, and **blocks requests when it cannot verify the budget**.
 
-> **Not a zero-charge guarantee.** OpenAI does not provide a real-time atomic reservation endpoint for complimentary Data Sharing tokens. Usage API data may lag, incentive eligibility can change, and direct organization traffic can bypass the proxy. v0.1 is **mock-verified, not cleared for production billing traffic**. Never send credentials, private/company code, or other sensitive data to a Data Sharing-enabled project.
+- **Conservative by default:** No automatic switch to paid API usage.
+- **Shared quota tracking:** Select your OpenAI project and Build / Launch / Grow tier. Premium and economy model groups have separate daily caps.
+- **Local access:** The proxy listens on `127.0.0.1`. Project and Admin API keys run in separate processes.
+- **Safe fallback signal:** Clients can use quota-related 429/503 responses to switch to another provider at a safe task boundary.
 
-## Status (v0.1.1)
+> **Important:** QuotaFuse reduces the risk of unexpected charges; it cannot guarantee a zero-cost bill. OpenAI's usage data may be delayed, and direct or other-project API traffic may consume the same allowance. **The current release is not yet validated against a live Data Sharing bill. Keep inference disabled until you complete the [billing checklist](docs/billing-validation.md).** Use only public, non-sensitive input.
 
-| Capability | State |
-| --- | --- |
-| Standalone text-only `POST /v1/responses` JSON / SSE | Implemented, mock-tested |
-| Exact model allowlist, reject unknown feature/endpoint | Implemented |
-| SQLite WAL + `BEGIN IMMEDIATE` atomic admission | Implemented |
-| Proxy-controlled output cap, pessimistic provisional reserve | Implemented |
-| Exact Responses preflight `/responses/input_tokens` | Gated by explicit cost verification; not live-audited |
-| Usage-aware settlement, UNKNOWN retention, idempotency | Implemented |
-| Separate Admin Usage API collector + paginated model/project totals | Implemented, mock-tested; **not official remaining complimentary tokens** |
-| Local-only auth, public-data attestation, no request body logs | Implemented |
-| `/quota`, `/health/live`, `/health/ready`, `/v1/models` | Implemented |
-| `POST /v1/chat/completions` | **Explicit 503** until independently validated conservative counter exists |
-| OMP fallback provider integration | Contract/demo only; OMP compatibility not verified |
-| Real Data Sharing account + Costs audit | **Not performed; NO-GO** |
+## Install
 
-### Deliberate implementation difference
-
-The supplied initial spec suggested Fastify; this first implementation uses the **Node.js 22 native HTTP API** instead, with TypeScript's built-in type stripping and `node:sqlite`. No production runtime npm dependencies are required, and unit/integration tests run without network access. A subsequent release may adopt Fastify after the same security checks are reproduced. The `node:sqlite` API is still experimental on Node 22; pin/test your runtime. The runtime config is strict **JSON** (`config.example.json`); no YAML runtime example is shipped.
-
-## Quick start (safe default)
+Requires **Node.js 22.13+**, npm, and a local machine or VM. Docker and remote listening are not supported by this release.
 
 ```bash
 git clone https://github.com/tc3oliver/quota-fuse.git
 cd quota-fuse
-```
-
-
-```bash
-cp config.example.json config.json
-# Edit config.json: dataSharing.projectId and tier, verified model list,
-# and, *only after audit*, explicit safety attestations.
-export QG_PROXY_TOKEN="$(node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))')"
-# A project key is only needed for an operator-approved live integration:
-# export OPENAI_API_KEY=...
 npm ci
-npm run check
-npm run demo  # mock 429 → safe Codex fallback decision, 0 live requests
-npm start
+npm run setup
 ```
 
-With the sample config, `/health/ready` returns 503 and all inference requests are **blocked by design**. No actual API calls are made. Tests inject a mock upstream and mock usage collector.
+Setup creates three **Git-ignored**, owner-readable files without overwriting existing settings:
 
-```bash
-curl -s http://127.0.0.1:8787/health/live
-curl -s -H "Authorization: Bearer $QG_PROXY_TOKEN" http://127.0.0.1:8787/quota
-```
+| File | What to configure |
+| --- | --- |
+| `config.json` | Data Sharing project ID, organization tier, eligible model IDs, safety policy |
+| `.env.proxy` | Your project-scoped `OPENAI_API_KEY`; a random proxy access token is generated |
+| `.env.collector` | Your separate `OPENAI_ADMIN_KEY` for usage reporting |
 
-A live client **after** all verification gates are satisfied:
+**Do not put your Admin API key in `.env.proxy`.** Keep the two processes and their credentials separate.
 
-```bash
-curl http://127.0.0.1:8787/v1/responses \
-  -H "Authorization: Bearer $QG_PROXY_TOKEN" \
-  -H "X-Quota-Guard-Data-Classification: public" \
-  -H "Idempotency-Key: example-00000001" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"REPLACE_WITH_A_MANUALLY_VERIFIED_MODEL_ID","input":"Explain binary search.","max_output_tokens":256,"stream":false}'
-```
+## Set up with a coding agent (optional)
 
-All endpoints other than those listed above, multimodal inputs, remote state, tools, function calls, background tasks, `n>1`, unlimited output, aliases, and other advanced request fields are rejected or unsupported. Clients **must supply a stable idempotency key** and public-only classification. This intentionally sacrifices some transparent SDK compatibility for fail-closed semantics.
-
-## Deploying with a real OpenAI account (operator-audited only)
-
-1. Select the verified `dataSharing.projectId` and your organization's `dataSharing.tier` (`build`, `launch`, `grow`). [Configuration guide](docs/data-sharing-configuration.md) explains the tier caps, project restrictions and migration. Confirm enrollment, positive balance and exact eligible models; models are empty by default.
-2. Follow [billing validation and reconciliation](docs/billing-validation.md); audit whether the separate `/v1/responses/input_tokens` call itself is eligible and nonchargeable for your setup, and whether its counts match the exact allowed request shape. Set `policy.inputCounter` to `responses_preflight` and `policy.preflightCostVerified` to `true` **only after checking actual Costs**.
-3. Establish exclusive control of all org traffic eligible for these shared group caps, or treat other project traffic as untrusted and keep the proxy paused. The collector rejects unexpected project/model usage.
-4. Set three **expiring** operator attestation timestamps to UTC times after the current time: `eligibilityAttestedUntil`, `exclusiveOrgTrafficAttestedUntil`, `manualCostsAuditedUntil`. These are human operational controls, not proof of eligibility obtained by an API.
-5. Use a separate shell/process holding only `OPENAI_ADMIN_KEY` to run `npm run collector -- --once` or the recurring collector. **Never provide the Admin key to the proxy**. Run the proxy with only `OPENAI_API_KEY` (project scoped) and `QG_PROXY_TOKEN`.
-6. Check `/health/ready` and `/quota` and manually compare official Dashboard Data Sharing incentive tier and Costs. Small audited traffic only, with an external budget and alerts.
-
-`/quota.estimated_remaining` is **guarded local admission capacity** and **never an official free-balance statement**. Stale collector checkpoints or expired attestations report zero admissible capacity.
-
-## Layout
+You can ask **Claude Code, Codex, OpenCode or another local coding agent** to perform the installation checks and prepare your configuration. Open a terminal in the cloned `quota-fuse` directory, start your agent, and paste this prompt:
 
 ```text
-src/                     Policy, ledger, HTTP transport, collector and CLI
-migrations/              SQLite schema and additive safety migrations
-package-lock.json        Pinned dev dependencies for repeatable CI installs
-config.example.json      Runtime configuration (deny-by-default)
-SPEC.md                  Supplied technical specification
-examples/                OMP fallback *contract* demonstration
-tests/                   No-live-API unit, integration, failure-injection tests
-docs/security.md         Threat model and disclosure
-docs/runbook.md         Setup, incidents and operational restrictions
-docs/test-matrix.md     Acceptance matrix and explicit gaps
-docs/billing-validation.md  Admin API limitations, live billing validation, operator recovery
-docs/data-sharing-configuration.md  Project, organization tier and migration guide
-docs/release-checklist.md OSS publish and security-settings checklist
+Help me install and configure QuotaFuse on this computer.
+
+Work in this repository. Read README.md, docs/deployment.md,
+docs/data-sharing-configuration.md and docs/billing-validation.md first.
+
+1. Check my OS, Node.js (>=22.13) and npm. Explain any missing prerequisites.
+2. Run npm ci and npm run setup. Never overwrite existing config.json,
+   .env.proxy, .env.collector or the SQLite database.
+3. Ask me only for NON-SECRET configuration details: the approved
+   OpenAI project ID (proj_...), organization Data Sharing tier
+   (build/launch/grow) and exact eligible model IDs. Do not guess any
+   eligibility or tier from model names. Validate configured group limits.
+4. Tell me where to enter my OpenAI project API key and separate Admin API key.
+   Have me edit .env.proxy and .env.collector locally myself; NEVER ask me
+   to paste credentials into chat, read existing secrets, print their values,
+   commit them or send them to another service.
+5. Run npm run check. Start only the local proxy with npm run start:local
+   and run npm run status:local. A fresh install MUST remain PAUSED.
+   Do not send any real OpenAI requests or run a live billing test.
+6. Report what passed, what I still need to verify in the OpenAI dashboard
+   and the exact commands for the separate collector and normal startup.
+   Do not mark preflightCostVerified=true or set future billing/eligibility
+   attestations without my explicit approval AND independent billing proof.
+
+Do not enable automatic boot services or modify system-wide settings
+without first asking me. This release does not include a service installer.
+Preserve fail-closed defaults throughout.
+
+At the very end of your setup report, offer an optional GitHub Star.
+If `gh` is installed AND already authenticated (check availability and
+`gh auth status` quietly without printing credentials), ask me:
+"Would you like to star tc3oliver/quota-fuse on GitHub? [Y/n]"
+Wait for my response. Run `gh repo star tc3oliver/quota-fuse` ONLY if I
+explicitly answer Y or yes; for n/no, a blank answer, or anything unclear,
+skip it. Do not run `gh auth login` or make me authenticate just to star.
+If `gh` is unavailable or not authenticated, simply provide this link:
+https://github.com/tc3oliver/quota-fuse
+Starring is optional. Never star automatically or make it a prerequisite
+for installation, setup, or any other task.
 ```
 
-## Security and release expectations
+**You remain responsible for verifying enrollment and billing.** The agent can prepare local files and check that the service starts, but it cannot prove that the Data Sharing allowance is active or that a request will be free. See the [billing checklist](docs/billing-validation.md) before enabling traffic.
 
-This is an **experimental security boundary**, not a paid-API cost guarantee. The
-SQLite quota estimator requires an operator-audited, exclusive usage domain and
-independent billing checks. Unverified traffic is rejected. An HTTP client
-claiming its payload is `public` is an *attestation*, not a DLP scanner. See
-[the threat model](docs/security.md) and the
-[release checklist](docs/release-checklist.md).
+## Start
 
-## Contributing
+Run these commands **in separate terminals**, from the repository directory:
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [docs/security.md](docs/security.md). Contributions must preserve fail-closed admission, no automatic paid fallback, and tests without real paid API requests.
+```bash
+# Terminal 1 — API proxy
+npm run start:local
+```
 
-## References
+```bash
+# Terminal 2 — organization usage collector (refreshes every 120 seconds)
+npm run collector:local
+```
 
-- [Official data-sharing incentive and eligibility terms](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai)
-- [Count Responses input tokens](https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count)
-- [Organization Usage API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions)
+```bash
+# Terminal 3 — status and guarded quota estimates
+npm run status:local
+```
 
-**Apache-2.0**. This is an independent project, not affiliated with or endorsed by OpenAI.
+The proxy serves `http://127.0.0.1:8787`. A fresh installation shows **PAUSED**, and requests are rejected until the [eligibility and billing checks](docs/billing-validation.md) have been completed. This is intentional; simply adding keys or selecting a tier does not enable paid traffic.
 
-Preflight-only `UNKNOWN` reservations may be **manually** reconciled after independently verified zero billable usage, using `npm run reconcile` and an evidence reference. See [billing validation](docs/billing-validation.md); generation-dispatched unknown outcomes are deliberately not automatically released.
+## Configure your allowance
+
+In `config.json`, set the project's actual `proj_...` ID and the **organization Data Sharing tier** confirmed in your OpenAI dashboard:
+
+```json
+{
+  "dataSharing": {
+    "projectId": "proj_your_project",
+    "tier": "build"
+  }
+}
+```
+
+The example above is a **fragment**; keep the other fields generated in `config.json`. Supported tiers:
+
+| Tier | Premium tokens/day | Economy tokens/day |
+| --- | ---: | ---: |
+| Build | 250,000 | 2,500,000 |
+| Launch / Grow | 1,000,000 | 10,000,000 |
+
+Those are **organization-shared group allowances**, not per-project quotas. QuotaFuse allows lower local caps and defaults to an **85% admission ceiling**. Exact eligible models must be entered in `quotas.premium.models` and `quotas.economy.models` after verification; no models are enabled by default. See [project and tier settings](docs/data-sharing-configuration.md).
+
+## Connect a client
+
+After completing the billing checklist, point a local Responses API client at:
+
+```text
+Base URL: http://127.0.0.1:8787/v1
+Auth:      Bearer <QG_PROXY_TOKEN from .env.proxy>
+```
+
+The supported request format is **standalone text-only `POST /v1/responses`** (JSON and streaming). Clients must include a stable `Idempotency-Key`, `X-Quota-Guard-Data-Classification: public`, and a bounded `max_output_tokens`. The `/v1/chat/completions` route, function tools, multimodal input and stored conversations are not available yet. See [API examples and error codes](docs/usage.md).
+
+## Guides
+
+- [Installation and deployment](docs/deployment.md) — setup, credentials, startup, and status
+- [Data Sharing project and tier](docs/data-sharing-configuration.md) — eligible model groups, shared caps, and migration
+- [Billing checklist](docs/billing-validation.md) — what to verify before enabling live traffic
+- [API usage](docs/usage.md) — requests, responses, and fallback behavior
+- [Troubleshooting and recovery](docs/runbook.md) — pause states, unknown outcomes, and safe recovery
+- [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Technical documentation](docs/development.md)
+
+QuotaFuse is an independent Apache-2.0 project, not affiliated with OpenAI.
