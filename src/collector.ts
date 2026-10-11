@@ -41,7 +41,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
         sawBucket = true;
         for (const row of bucket.results) {
           // Unknown/other project usage may consume the same organization-level incentive: pause.
-          if (!row || row.project_id !== config.upstream.projectId || typeof row.model !== 'string') throw new Error('Unattributed or side-channel usage detected');
+          if (!row || row.project_id !== config.dataSharing.projectId || typeof row.model !== 'string') throw new Error('Unattributed or side-channel usage detected');
           const group = groups.get(row.model);
           if (!group) throw new Error('New or unreviewed model observed in org usage');
           if (!whole(row.input_tokens) || !whole(row.output_tokens)) throw new Error('Untrustworthy official token count');

@@ -2,9 +2,18 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export type Group = 'premium' | 'economy';
+/** Organization incentive tier, not a model/processing service_tier. */
+export type DataSharingTier = 'build' | 'launch' | 'grow';
+export const DATA_SHARING_LIMITS: Readonly<Record<DataSharingTier, Readonly<Record<Group, number>>>> = {
+  build: { premium: 250_000, economy: 2_500_000 },
+  launch: { premium: 1_000_000, economy: 10_000_000 },
+  grow: { premium: 1_000_000, economy: 10_000_000 }
+};
 export interface Config {
   server: { host: string; port: number; storage: string; maxRequestBytes: number; maxConcurrentRequests: number };
-  upstream: { baseUrl: string; projectId: string };
+  upstream: { baseUrl: string };
+  /** Explicitly selected Data Sharing project and operator-confirmed org tier. */
+  dataSharing: { projectId: string; tier: DataSharingTier };
   policy: {
     mode: 'FREE_ONLY'; safetyPct: number; maxOutputTokens: number; accountMargin: number;
     inputCounter: 'reject' | 'responses_preflight'; preflightCostVerified: boolean;
@@ -18,7 +27,11 @@ export function validateConfig(c: Config): Config {
   if (c.server?.host !== '127.0.0.1') throw new Error('Only 127.0.0.1 binding supported');
   if (!Number.isInteger(c.server.port) || c.server.port < 0 || c.server.port > 65535) throw new Error('Invalid port');
   if (!/^https:\/\/api\.openai\.com\/v1$/.test(c.upstream?.baseUrl)) throw new Error('Upstream must be https://api.openai.com/v1');
-  if (typeof c.upstream.projectId !== 'string' || !c.upstream.projectId.trim()) throw new Error('Dedicated OpenAI project ID required');
+  if (Object.hasOwn(c.upstream, 'projectId')) throw new Error('Move upstream.projectId to dataSharing.projectId; do not configure conflicting project sources');
+  if (!c.dataSharing || !Object.hasOwn(DATA_SHARING_LIMITS, c.dataSharing.tier))
+    throw new Error('Explicit Data Sharing tier required (build, launch, or grow)');
+  if (typeof c.dataSharing.projectId !== 'string' || !/^proj_[a-zA-Z0-9_-]{3,}$/.test(c.dataSharing.projectId))
+    throw new Error('Dedicated Data Sharing project ID must begin with proj_');
   if (c.policy.safetyPct < 1 || c.policy.safetyPct > 85 || !Number.isInteger(c.policy.safetyPct)) throw new Error('Safety percentage must be 1-85');
   for (const key of ['maxOutputTokens', 'accountMargin', 'reconcileMaxAgeSeconds'] as const) {
     if (!Number.isSafeInteger(c.policy[key]) || c.policy[key] < (key === 'accountMargin' ? 0 : 1)) throw new Error('Invalid policy ' + key);
@@ -31,6 +44,10 @@ export function validateConfig(c: Config): Config {
   for (const group of ['premium', 'economy'] as const) {
     const q = c.quotas?.[group];
     if (!q || !Number.isSafeInteger(q.dailyTokens) || q.dailyTokens < 1 || !Array.isArray(q.models)) throw new Error('Invalid quota ' + group);
+    // The org-level complimentary pool is shared across all eligible projects
+    // and models in this group; dailyTokens may be LOWER, never higher.
+    if (q.dailyTokens > DATA_SHARING_LIMITS[c.dataSharing.tier][group])
+      throw new Error('Quota ' + group + ' exceeds ' + c.dataSharing.tier + ' Data Sharing tier entitlement');
     for (const model of q.models) {
       if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(model) || seen.has(model) || model.endsWith('-latest')) throw new Error('Model IDs must be unique and explicit, not aliases');
       seen.add(model);

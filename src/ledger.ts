@@ -53,7 +53,7 @@ export class Ledger {
     this.tx(() => this.db.prepare("UPDATE reservations SET state='UNKNOWN', updated_at=? WHERE state='PENDING'").run(new Date().toISOString()));
   }
   private policyHash(config: Config): string {
-    const canonical = JSON.stringify({ projectId: config.upstream.projectId,
+    const canonical = JSON.stringify({ projectId: config.dataSharing.projectId, dataSharingTier: config.dataSharing.tier,
       groups: config.quotas, safetyPct: config.policy.safetyPct,
       outputCap: config.policy.maxOutputTokens, accountMargin: config.policy.accountMargin,
       counter: config.policy.inputCounter });

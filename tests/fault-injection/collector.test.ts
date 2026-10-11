@@ -10,7 +10,7 @@ function page(rows:any[],next:string|null=null) {
   const today=Math.floor(Date.parse(new Date().toISOString().slice(0,10)+'T00:00:00Z')/1000);
   return {object:'page',data:[{object:'bucket',start_time:today,end_time:today+86400,results:rows}],has_more:!!next,next_page:next};
 }
-const row=(model:string,n:number)=>({model,project_id:'proj-test',input_tokens:n,output_tokens:n});
+const row=(model:string,n:number)=>({model,project_id:'proj_test',input_tokens:n,output_tokens:n});
 test('complete paginated usage aggregates groups then unpauses',async()=>{
   const l=new Ledger(':memory:'),c=cfg(),pages=[page([row(c.quotas.premium.models[0],100)],'cursor'),page([row(c.quotas.economy.models[0],200)])];
   let calls=0;

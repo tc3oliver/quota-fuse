@@ -41,7 +41,7 @@ cd quota-fuse
 
 ```bash
 cp config.example.json config.json
-# Edit config.json: dedicated project ID, manually verified exact model list,
+# Edit config.json: dataSharing.projectId and tier, verified model list,
 # and, *only after audit*, explicit safety attestations.
 export QG_PROXY_TOKEN="$(node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))')"
 # A project key is only needed for an operator-approved live integration:
@@ -74,7 +74,7 @@ All endpoints other than those listed above, multimodal inputs, remote state, to
 
 ## Deploying with a real OpenAI account (operator-audited only)
 
-1. Confirm eligibility, enrollment, correct group sizes, positive account balance, the exact eligible model IDs, and that the dedicated project is configured for Data Sharing. Eligibility is **not** inferred from model names. Models are empty by default.
+1. Select the verified `dataSharing.projectId` and your organization's `dataSharing.tier` (`build`, `launch`, `grow`). [Configuration guide](docs/data-sharing-configuration.md) explains the tier caps, project restrictions and migration. Confirm enrollment, positive balance and exact eligible models; models are empty by default.
 2. Follow [billing validation and reconciliation](docs/billing-validation.md); audit whether the separate `/v1/responses/input_tokens` call itself is eligible and nonchargeable for your setup, and whether its counts match the exact allowed request shape. Set `policy.inputCounter` to `responses_preflight` and `policy.preflightCostVerified` to `true` **only after checking actual Costs**.
 3. Establish exclusive control of all org traffic eligible for these shared group caps, or treat other project traffic as untrusted and keep the proxy paused. The collector rejects unexpected project/model usage.
 4. Set three **expiring** operator attestation timestamps to UTC times after the current time: `eligibilityAttestedUntil`, `exclusiveOrgTrafficAttestedUntil`, `manualCostsAuditedUntil`. These are human operational controls, not proof of eligibility obtained by an API.
@@ -97,6 +97,7 @@ docs/security.md         Threat model and disclosure
 docs/runbook.md         Setup, incidents and operational restrictions
 docs/test-matrix.md     Acceptance matrix and explicit gaps
 docs/billing-validation.md  Admin API limitations, live billing validation, operator recovery
+docs/data-sharing-configuration.md  Project, organization tier and migration guide
 docs/release-checklist.md OSS publish and security-settings checklist
 ```
 

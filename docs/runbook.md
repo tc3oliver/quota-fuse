@@ -2,7 +2,7 @@
 
 ## Setup / startup
 
-Run Node.js 22.13 or later (prefer exactly pinned environment). Copy `config.example.json` to ignored `config.json`. A brand-new install is paused until verification; do not use default placeholder IDs in real requests. Store secrets outside the repository and avoid long-lived admin credentials on developer desktops when possible.
+Run Node.js 22.13 or later (prefer exactly pinned environment). Copy `config.example.json` to ignored `config.json`. Configure `dataSharing.projectId`, the verified org `dataSharing.tier`, and per-group limits as in [configuration guide](data-sharing-configuration.md). A brand-new install is paused until verification; do not use default placeholder IDs in real requests. Store secrets outside the repository and avoid long-lived admin credentials on developer desktops when possible.
 
 Keep the proxy and usage collector as **distinct processes and credentials**. The proxy refuses to boot when `OPENAI_ADMIN_KEY` is present, and the collector refuses to boot when `OPENAI_API_KEY` is present. This stops an accidental shared environment, not a privileged OS adversary.
 
@@ -43,7 +43,7 @@ See [billing-validation.md](billing-validation.md) before enabling any actual Op
 4. Stop and investigate if official high watermark regresses, official totals exceed verified baseline plus all locally accounted tokens, foreign-project traffic appears, unexpected actual tokens breach their reservation, or Data Sharing enrollment changes. Accounting invariant failures remain paused even after a successful collector poll; do not manually change guard_control without an audited recovery procedure. Config attestation expiration blocks usage.
 5. To resume, document the independent evidence, use the documented offline `npm run reconcile` operation only for audited preflight-only UNKNOWN results; all other unknown outcomes require separate reviewed procedures, and re-run the collector. Production unpause is **not** represented as automatic recovery in this release.
 
-Changes to project/model allowlists, safety caps, or token counter modes also fail closed via the persisted policy fingerprint. A persistent previous-day PENDING/UNKNOWN causes new-day requests to fail closed. Without an audited resolution there is no safe self-service bypass. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
+Changes to project, Data Sharing tier, model allowlists, safety caps, or token counter modes also fail closed via the persisted policy fingerprint. A persistent previous-day PENDING/UNKNOWN causes new-day requests to fail closed. Without an audited resolution there is no safe self-service bypass. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
 
 ## Checks
 

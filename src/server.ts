@@ -121,7 +121,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
         try {
           const headers: Record<string,string> = {
             'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-            'OpenAI-Project': config.upstream.projectId,
+            'OpenAI-Project': config.dataSharing.projectId,
             'Content-Type': 'application/json'
           };
           // This preflight network operation is ONLY allowed after explicit operator audit
