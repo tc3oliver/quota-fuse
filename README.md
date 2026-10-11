@@ -35,6 +35,42 @@ Setup creates three **Git-ignored**, owner-readable files without overwriting ex
 
 **Do not put your Admin API key in `.env.proxy`.** Keep the two processes and their credentials separate.
 
+## Set up with a coding agent (optional)
+
+You can ask **Claude Code, Codex, OpenCode or another local coding agent** to perform the installation checks and prepare your configuration. Open a terminal in the cloned `quota-fuse` directory, start your agent, and paste this prompt:
+
+```text
+Help me install and configure QuotaFuse on this computer.
+
+Work in this repository. Read README.md, docs/deployment.md,
+docs/data-sharing-configuration.md and docs/billing-validation.md first.
+
+1. Check my OS, Node.js (>=22.13) and npm. Explain any missing prerequisites.
+2. Run npm ci and npm run setup. Never overwrite existing config.json,
+   .env.proxy, .env.collector or the SQLite database.
+3. Ask me only for NON-SECRET configuration details: the approved
+   OpenAI project ID (proj_...), organization Data Sharing tier
+   (build/launch/grow) and exact eligible model IDs. Do not guess any
+   eligibility or tier from model names. Validate configured group limits.
+4. Tell me where to enter my OpenAI project API key and separate Admin API key.
+   Have me edit .env.proxy and .env.collector locally myself; NEVER ask me
+   to paste credentials into chat, read existing secrets, print their values,
+   commit them or send them to another service.
+5. Run npm run check. Start only the local proxy with npm run start:local
+   and run npm run status:local. A fresh install MUST remain PAUSED.
+   Do not send any real OpenAI requests or run a live billing test.
+6. Report what passed, what I still need to verify in the OpenAI dashboard
+   and the exact commands for the separate collector and normal startup.
+   Do not mark preflightCostVerified=true or set future billing/eligibility
+   attestations without my explicit approval AND independent billing proof.
+
+Do not enable automatic boot services or modify system-wide settings
+without first asking me. This release does not include a service installer.
+Preserve fail-closed defaults throughout.
+```
+
+**You remain responsible for verifying enrollment and billing.** The agent can prepare local files and check that the service starts, but it cannot prove that the Data Sharing allowance is active or that a request will be free. See the [billing checklist](docs/billing-validation.md) before enabling traffic.
+
 ## Start
 
 Run these commands **in separate terminals**, from the repository directory:
@@ -91,7 +127,7 @@ The supported request format is **standalone text-only `POST /v1/responses`** (J
 
 ## Guides
 
-- [Deployment and service management](docs/deployment.md) — setup, credentials, startup, and status
+- [Installation and deployment](docs/deployment.md) — setup, credentials, startup, and status
 - [Data Sharing project and tier](docs/data-sharing-configuration.md) — eligible model groups, shared caps, and migration
 - [Billing checklist](docs/billing-validation.md) — what to verify before enabling live traffic
 - [API usage](docs/usage.md) — requests, responses, and fallback behavior
