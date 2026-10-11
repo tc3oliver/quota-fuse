@@ -235,8 +235,8 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
               if (terminal === 'incomplete') {
                 // Chat cannot report a complete tool call/assistant message; do not
                 // emit a fabricated finish_reason=stop or a success [DONE] marker.
-                res.write('event: error\\ndata: '+JSON.stringify({error:{type:'upstream_incomplete',
-                  code:'UPSTREAM_INCOMPLETE',message:'Generation stopped at max_output_tokens; usage was settled.'}})+'\\n\\n');
+                res.write('event: error\ndata: '+JSON.stringify({error:{type:'upstream_incomplete',
+                  code:'UPSTREAM_INCOMPLETE',message:'Generation stopped at max_output_tokens; usage was settled.'}})+'\n\n');
               } else if (finalResponse) res.write(chatStreamEnd(finalResponse));
             }
             res.end();
