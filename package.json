@@ -16,6 +16,7 @@
     "quota": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/quota-cli.ts",
     "reconcile": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/reconcile-cli.ts",
     "test": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test tests/**/*.test.ts",
+    "test:agent": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test tests/agent/*.test.ts",
     "check": "npm run typecheck && npm test",
     "typecheck": "tsc --noEmit",
     "demo": "node --disable-warning=ExperimentalWarning --experimental-strip-types examples/e2e-demo.ts"
