@@ -16,6 +16,16 @@ export class LedgerError extends Error {
 }
 const migration = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/001_initial.sql'), 'utf8');
 const safeInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+// A healthy collector may clear ONLY these known transport/readiness pauses.
+// Invariant failures, operator holds and unrecognized reasons remain sticky.
+const collectorRecoverable = new Set<string | null>([
+  null, 'COLLECTOR_NOT_VERIFIED', 'COLLECTOR_UNVERIFIED', 'COLLECTOR_DOWN',
+  'COLLECTOR_REFRESHING' // recovery from an older interrupted deployment
+]);
+const collectorInvariantFailures = new Set([
+  'ACTUAL_EXCEEDS_RESERVED', 'UNACCOUNTED_OFFICIAL_USAGE',
+  'OFFICIAL_WATERMARK_REGRESSION', 'ANCHOR_UNVERIFIED'
+]);
 
 export class Ledger {
   readonly db: DatabaseSync;
@@ -146,30 +156,76 @@ export class Ledger {
   observation(day: string, group: Group): { official_high_watermark: number; anchor_tokens: number | null; reconciled_at: string } | undefined {
     return this.db.prepare('SELECT official_high_watermark, anchor_tokens, reconciled_at FROM observations WHERE utc_day=? AND group_name=?').get(day, group) as any;
   }
+  /** No network calls or long-running work are performed while holding a write lock. */
+  private validateObservation(day: string, group: Group, tokens: number, at: Date): void {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !safeInt(tokens) || !Number.isFinite(at.getTime()))
+      throw new LedgerError('INVALID_OBSERVATION', 'Invalid official reading');
+    const old = this.observation(day, group);
+    if (old && tokens < old.official_high_watermark)
+      throw new LedgerError('OFFICIAL_WATERMARK_REGRESSION', 'Official reading decreased');
+    if (old && old.anchor_tokens === null)
+      throw new LedgerError('ANCHOR_UNVERIFIED', 'Legacy checkpoint cannot be trusted without a verified reconciliation baseline');
+    if (!old) {
+      const present = this.db.prepare('SELECT COUNT(*) AS n FROM reservations WHERE utc_day=? AND group_name=?').get(day, group) as {n:number};
+      if (present.n) throw new LedgerError('ANCHOR_UNVERIFIED', 'Cannot initialize a baseline after local requests were admitted');
+    }
+    if (at.getTime() > Date.now() + 5000) throw new LedgerError('CLOCK_SKEW', 'Future collector checkpoint');
+    if (old) {
+      const { settled, outstanding } = this.usage(day, group);
+      const knownUpperBound = old.anchor_tokens! + settled + outstanding;
+      if (!Number.isSafeInteger(knownUpperBound) || tokens > knownUpperBound)
+        throw new LedgerError('UNACCOUNTED_OFFICIAL_USAGE', 'Official reading exceeds verified baseline plus local upper bound');
+    }
+  }
+  private saveObservation(day: string, group: Group, tokens: number, at: Date): void {
+    this.db.prepare(`INSERT INTO observations(utc_day,group_name,official_high_watermark,anchor_tokens,reconciled_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(utc_day,group_name) DO UPDATE SET official_high_watermark=excluded.official_high_watermark,reconciled_at=excluded.reconciled_at`)
+      .run(day, group, tokens, tokens, at.toISOString());
+  }
   recordObservation(day: string, group: Group, tokens: number, at = new Date()): void {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !safeInt(tokens)) throw new LedgerError('INVALID_OBSERVATION', 'Invalid official reading');
     this.tx(() => {
-      const old = this.observation(day, group);
-      if (old && tokens < old.official_high_watermark) throw new LedgerError('OFFICIAL_WATERMARK_REGRESSION', 'Official reading decreased');
-      if (old && old.anchor_tokens === null) throw new LedgerError('ANCHOR_UNVERIFIED', 'Legacy checkpoint cannot be trusted without a verified reconciliation baseline');
-      if (!old) {
-        const present = this.db.prepare('SELECT COUNT(*) AS n FROM reservations WHERE utc_day=? AND group_name=?').get(day, group) as {n:number};
-        if (present.n) throw new LedgerError('ANCHOR_UNVERIFIED', 'Cannot initialize a baseline after local requests were admitted');
-      }
-      if (at.getTime() > Date.now() + 5000) throw new LedgerError('CLOCK_SKEW', 'Future collector checkpoint');
-      if (old) {
-        // Every token after a verified exclusive-traffic baseline must fit
-        // within locally settled requests or outstanding upper bounds.
-        const { settled, outstanding } = this.usage(day, group);
-        const knownUpperBound = old.anchor_tokens! + settled + outstanding;
-        if (!Number.isSafeInteger(knownUpperBound) || tokens > knownUpperBound)
-          throw new LedgerError('UNACCOUNTED_OFFICIAL_USAGE', 'Official reading exceeds verified baseline plus local upper bound');
-      }
-      this.db.prepare(`INSERT INTO observations(utc_day,group_name,official_high_watermark,anchor_tokens,reconciled_at) VALUES(?,?,?,?,?)
-        ON CONFLICT(utc_day,group_name) DO UPDATE SET official_high_watermark=excluded.official_high_watermark,reconciled_at=excluded.reconciled_at`)
-        .run(day, group, tokens, tokens, at.toISOString());
+      this.validateObservation(day, group, tokens, at);
+      this.saveObservation(day, group, tokens, at);
     });
   }
+  /** A collector may fetch off-lock while the existing verified watermark is fresh.
+   * Publish both groups and clear a recoverable collector pause in ONE transaction,
+   * so admission never observes a half-updated pair of official baselines.
+   * Any accounting invariant failure pauses in that same transaction. */
+  publishOfficialUsage(day: string, sums: Record<Group,number>, at = new Date()): void {
+    let validationFailure: LedgerError | null = null;
+    this.tx(() => {
+      if (!collectorRecoverable.has(this.pauseReason()))
+        throw new LedgerError('MANUAL_REVIEW_REQUIRED', 'Collector cannot replace an operator hold or accounting failure');
+      try {
+        for (const group of ['premium','economy'] as const)
+          this.validateObservation(day, group, sums[group], at);
+      } catch (e) {
+        if (!(e instanceof LedgerError)) throw e;
+        validationFailure = e;
+        // Commit the failure pause without committing any partially checked
+        // observation. Throwing inside the transaction would roll back pause.
+        this.db.prepare('UPDATE guard_control SET paused_reason=? WHERE id=1')
+          .run(collectorInvariantFailures.has(e.code) ? e.code : 'COLLECTOR_UNVERIFIED');
+        return;
+      }
+      for (const group of ['premium','economy'] as const)
+        this.saveObservation(day, group, sums[group], at);
+      this.db.prepare('UPDATE guard_control SET paused_reason=NULL WHERE id=1').run();
+    });
+    if (validationFailure) throw validationFailure;
+  }
+  /** Fail closed on unavailable/untrustworthy collector data without erasing a
+   * stronger pre-existing pause, even if it was set during an in-flight fetch. */
+  pauseCollectorFailure(reason = 'COLLECTOR_UNVERIFIED'): void {
+    this.tx(() => {
+      const current = this.pauseReason();
+      if (collectorRecoverable.has(current))
+        this.db.prepare('UPDATE guard_control SET paused_reason=? WHERE id=1')
+          .run(collectorInvariantFailures.has(reason) ? reason : 'COLLECTOR_UNVERIFIED');
+    });
+  }
+  collectorMayPoll(): boolean { return collectorRecoverable.has(this.pauseReason()); }
   private usage(day: string, group: Group) {
     const s = this.db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN state IN ('COMPLETED','RECONCILED') THEN actual ELSE 0 END),0) AS settled,

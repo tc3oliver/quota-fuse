@@ -38,7 +38,7 @@ Legacy checkpoint rows are upgraded with a `NULL` baseline and **remain unverifi
 
 ## Operation and recovery
 
-- The collector polls every 120 seconds; incomplete pages, unexpected projects/models, stale snapshots or failures pause admissions. If the current UTC day changed, a new checkpoint is required.
+- The collector polls every 120 seconds without pausing otherwise-READY traffic while an existing verified checkpoint is still fresh. Each full paginated result is validated off-lock; Premium/Economy observations and collector recovery are published atomically in one short SQLite transaction. An incomplete page, unexpected project/model or failed Admin API immediately sets a persistent fail-closed pause without erasing any stronger operator/invariant hold. Independently, any checkpoint that expires during a slow poll denies admission, even before the poll completes. If the current UTC day changed, a new verified baseline is required and admissions remain blocked until both groups are initialized.
 - Each request receives an early provisional reservation in `PREFLIGHT` phase. A valid official input token count atomically shrinks the reservation and marks `DISPATCHED` **before** the generation HTTP call. Missing, disconnected or invalid input counts retain the original reservation as `UNKNOWN` (preflight may itself require billing review).
 - To resolve an `UNKNOWN` with `phase=PREFLIGHT`, stop both Proxy and Collector, obtain an encrypted DB backup, keep admissions paused and independently verify the counter caused **zero billable usage**. With a durable evidence reference, run:
 

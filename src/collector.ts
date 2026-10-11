@@ -1,15 +1,15 @@
 import type { Config, Group } from './config.ts';
 import { utcDay, unrestrictedModels } from './config.ts';
-import { Ledger, LedgerError } from './ledger.ts';
+import { Ledger } from './ledger.ts';
 import { groupForUnrestrictedModel } from './model-groups.ts';
 
 export interface CollectOptions { fetchImpl?: typeof fetch; now?: Date; adminKey?: string }
 function whole(v: unknown): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0; }
-const reviewRequired = new Set(['ACTUAL_EXCEEDS_RESERVED', 'UNACCOUNTED_OFFICIAL_USAGE', 'OFFICIAL_WATERMARK_REGRESSION', 'ANCHOR_UNVERIFIED']);
 export async function collectOnce(config: Config, ledger: Ledger, options: CollectOptions = {}): Promise<Record<Group,number>> {
-  // Successful polling must never erase an accounting-invariant failure.
-  if (reviewRequired.has(ledger.pauseReason() ?? '')) throw new Error('Manual operator review required before collector may resume');
-  ledger.setPause('COLLECTOR_REFRESHING');
+  // Refuse operator holds and invariant failures, including any unknown pause
+  // reason. Do NOT pause healthy admissions merely because a poll has begun:
+  // snapshot staleness is enforced independently by the Proxy's gate.
+  if (!ledger.collectorMayPoll()) throw new Error('Manual operator review required before collector may resume');
   try {
     const key = options.adminKey ?? process.env.OPENAI_ADMIN_KEY;
     if (!key) throw new Error('Missing collector admin credential');
@@ -59,8 +59,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
       }
       if (!json.has_more) {
         if (!sawBucket) throw new Error('Missing official day bucket (cannot assume zero usage)');
-        for (const group of ['premium','economy'] as const) ledger.recordObservation(day, group, sums[group], now);
-        ledger.setPause(null);
+        ledger.publishOfficialUsage(day, sums, now);
         return sums;
       }
       if (typeof json.next_page !== 'string' || !json.next_page || visited.has(json.next_page)) throw new Error('Broken pagination');
@@ -70,7 +69,8 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
     throw new Error('Pagination safety cap reached');
   } catch (e) {
     // Set/preserve paused state even for mid-pagination or authentication failures.
-    try { ledger.setPause(e instanceof LedgerError && reviewRequired.has(e.code) ? e.code : 'COLLECTOR_UNVERIFIED'); } catch { /* DB failures already fail closed */ }
+    // Never clobber MANUAL_REVIEW or a prior accounting-invariant failure.
+    try { ledger.pauseCollectorFailure(); } catch { /* DB failures already fail closed */ }
     throw e;
   }
 }
