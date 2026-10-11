@@ -389,7 +389,7 @@ test('OpenCode-shaped request passes: store:false + stream_options accepted, unb
   } finally { await h.close(); }
 });
 
-test('adapter: full agent loop through the header shim with zero client-side keys', async () => {
+test('adapter: full agent loop with explicit public classification and generated request keys', async () => {
   const h = await startProxy(agenticBehavior(
     [{ call_id: 'ak1', name: 'read_file', args: { path: PUBLIC_FILE } }],
     `Summary: ${FILE_CONTENT}`,
@@ -407,7 +407,9 @@ test('adapter: full agent loop through the header shim with zero client-side key
       const stream = turn === 1;
       const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json',
+          // Explicit test-fixture public-data assertion. The adapter must never invent it.
+          'X-Quota-Guard-Data-Classification': 'public' },
         body: JSON.stringify({ model: MODEL, messages, stream, stream_options: { include_usage: true }, store: false, tools: CHAT_TOOLS }),
       });
       const t = await r.text();
