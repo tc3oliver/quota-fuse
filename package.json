@@ -36,7 +36,7 @@
   ],
   "private": false,
   "devDependencies": {
-    "@types/node": "22.19.7",
+    "@types/node": "22.20.5",
     "typescript": "5.9.3"
   },
   "bugs": {
