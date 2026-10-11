@@ -30,7 +30,7 @@ test('fresh onboarding asks zero questions, retains empty model lists and defaul
    assert.equal(c.policy.eligibilityAttestedUntil,null);
    assert.equal(c.policy.manualCostsAuditedUntil,null);
    assert.match(r.stdout,/all valid model IDs accepted/);
-   assert.match(r.stdout,/may still incur/i);
+   assert.match(r.stdout,/could incur charges/i);
    assert.equal(existsSync(join(f.dir,'.env.proxy')),true);
    assert.equal(existsSync(join(f.dir,'.env.collector')),true);
    assert.equal(f.run().status,0);

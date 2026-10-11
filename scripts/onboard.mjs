@@ -115,7 +115,7 @@ try {
   console.log('\nQuotaFuse setup (' + (doctor ? 'read-only' : 'offline') + ')');
   console.log('  Data Sharing scope: All projects OR Selected projects; this must already cover the routing Project.');
   console.log('  Selected projects users: choose an already opted-in Project (no special Project required for All projects).');
-  console.log('  Routing Project: ' + (eligible ? 'selected' : 'missing (pick ANY existing proj_...)'));
+  console.log('  Routing Project: ' + (eligible ? 'selected' : 'missing (All projects: any existing; Selected projects: already opted-in only)'));
   console.log('  Organization tier: ' + c.dataSharing.tier + ' (confirm actual tier)');
   console.log('  Model filter: ' + (unfiltered ? 'OFF — all valid model IDs accepted' :
     'ON — premium=' + c.quotas.premium.models.length + ', economy=' + c.quotas.economy.models.length));
