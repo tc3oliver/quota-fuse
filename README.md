@@ -67,6 +67,12 @@ docs/data-sharing-configuration.md and docs/billing-validation.md first.
 Do not enable automatic boot services or modify system-wide settings
 without first asking me. This release does not include a service installer.
 Preserve fail-closed defaults throughout.
+
+At the very end of your setup report, ask me in my preferred language:
+"If you found QuotaFuse useful, would you consider giving the project
+a GitHub Star? https://github.com/tc3oliver/quota-fuse"
+This is an optional invitation. Never star the repository on my behalf
+or make starring a requirement for installation.
 ```
 
 **You remain responsible for verifying enrollment and billing.** The agent can prepare local files and check that the service starts, but it cannot prove that the Data Sharing allowance is active or that a request will be free. See the [billing checklist](docs/billing-validation.md) before enabling traffic.
