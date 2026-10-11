@@ -7,7 +7,8 @@ export class Denial extends Error {
 }
 export function gate(config: Config, ledger: Ledger, now = new Date()): void {
   const p = config.policy;
-  if (!attestedUntil(p.eligibilityAttestedUntil, now) || !attestedUntil(p.exclusiveOrgTrafficAttestedUntil, now) ||
+  if (/^proj_(SELECT|REPLACE|YOUR|EXAMPLE)/i.test(config.dataSharing.projectId) ||
+      !attestedUntil(p.eligibilityAttestedUntil, now) || !attestedUntil(p.exclusiveOrgTrafficAttestedUntil, now) ||
       !attestedUntil(p.manualCostsAuditedUntil, now) || !process.env.OPENAI_API_KEY || !process.env.QG_PROXY_TOKEN || ledger.isPaused() ||
       !p.preflightCostVerified || p.inputCounter !== 'responses_preflight' || ledger.hasCrossDayUnknown(utcDay(now))) {
     throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', 'Production safety gates are not verified');
@@ -17,6 +18,36 @@ export function gate(config: Config, ledger: Ledger, now = new Date()): void {
     if (obs.confidence === 'UNVERIFIED') throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', 'Official usage collector unhealthy', group);
   }
 }
+/** Non-sensitive diagnostic codes for an authenticated local readiness check.
+ * Independent of gate() so human guidance cannot accidentally grant admission. */
+export function readinessIssues(config: Config, ledger: Ledger, now = new Date()): string[] {
+  const p = config.policy;
+  const issues: string[] = [];
+  if (!process.env.OPENAI_API_KEY) issues.push('PROJECT_KEY_MISSING');
+  if (!process.env.QG_PROXY_TOKEN) issues.push('PROXY_TOKEN_MISSING');
+  if (/^proj_(?:SELECT|REPLACE|YOUR|EXAMPLE)/i.test(config.dataSharing.projectId))
+    issues.push('ROUTING_PROJECT_UNSET');
+  if (p.inputCounter !== 'responses_preflight') issues.push('PREFLIGHT_COUNTER_DISABLED');
+  if (!p.preflightCostVerified) issues.push('PREFLIGHT_COST_UNVERIFIED');
+  if (!attestedUntil(p.eligibilityAttestedUntil, now)) issues.push('ELIGIBILITY_ATTESTATION_MISSING');
+  if (!attestedUntil(p.exclusiveOrgTrafficAttestedUntil, now)) issues.push('TRAFFIC_ISOLATION_UNVERIFIED');
+  if (!attestedUntil(p.manualCostsAuditedUntil, now)) issues.push('COST_AUDIT_UNVERIFIED');
+  try {
+    const pause = ledger.pauseReason();
+    if (pause) issues.push('COLLECTOR_PAUSED:' + (pause.match(/^[A-Z_]{1,60}$/) ? pause : 'UNKNOWN'));
+    if (ledger.hasCrossDayUnknown(utcDay(now))) issues.push('PRIOR_DAY_UNKNOWN');
+    for (const group of ['premium', 'economy'] as const) {
+      try {
+        const obs = ledger.snapshot(config, utcDay(now), group, now);
+        if (obs.confidence === 'UNVERIFIED') issues.push('USAGE_BASELINE_UNVERIFIED:' + group.toUpperCase());
+      } catch {
+        issues.push('USAGE_BASELINE_UNVERIFIED:' + group.toUpperCase());
+      }
+    }
+  } catch { issues.push('LEDGER_UNAVAILABLE'); }
+  return issues;
+}
+
 export function classify(config: Config, model: unknown): Group {
   if (typeof model !== 'string' || model.length > 128 || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(model))
     throw new Denial(403, 'MODEL_NOT_ELIGIBLE', 'Valid exact model ID required');

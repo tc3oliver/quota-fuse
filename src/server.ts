@@ -3,7 +3,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { utcDay, type Config } from './config.ts';
 import { Ledger, LedgerError } from './ledger.ts';
-import { Denial, gate, validateRequest } from './policy.ts';
+import { Denial, gate, readinessIssues, validateRequest } from './policy.ts';
 import { chatResponse, chatStreamDelta, chatStreamEnd } from './chat.ts';
 
 const statusCode = (e: unknown) => e instanceof LedgerError ? (
@@ -72,7 +72,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
       if (!access || access.length < 32 || !secureAuth(req.headers.authorization, access)) throw new Denial(401, 'UNAUTHORIZED', 'Access token required');
       if (req.method === 'GET' && path === '/health/ready') {
         try { gate(config, ledger, now); return writeJson(res, 200, { status: 'ready' }); }
-        catch { return writeJson(res, 503, { status: 'paused_unverified' }); }
+        catch { return writeJson(res, 503, { status: 'paused_unverified', reasons: readinessIssues(config, ledger, now) }); }
       }
       if (req.method === 'GET' && path === '/quota') {
         const guarded = (() => { try { gate(config, ledger, now); return true; } catch { return false; } })();

@@ -127,9 +127,27 @@ try {
   console.log('  Admission: ' + (future && c.policy.preflightCostVerified &&
     c.policy.inputCounter === 'responses_preflight' ? 'operator gates declared (collector still required)' :
     'PAUSED until evidence-backed safety gates are configured'));
-  console.log('\nNext: ' + (!eligible ? 'choose project from ' + PROJECTS + '; ' : '') +
-    (!proxyKey || !adminKey ? 'complete the missing local keys; ' : '') +
-    'see docs/agent-install.md for startup and checks.');
+  const pending=[];
+  if (!eligible) pending.push('ROUTING_PROJECT_UNSET — choose an existing API Project');
+  if (!proxyKey) pending.push('PROJECT_KEY_MISSING — enter a scoped Project API key');
+  if (!adminKey) pending.push('ADMIN_KEY_MISSING — enter an Organization Admin API key');
+  if (c.policy.inputCounter !== 'responses_preflight') pending.push('PREFLIGHT_COUNTER_DISABLED — requires reviewed input-token counter billing');
+  if (!c.policy.preflightCostVerified) pending.push('PREFLIGHT_COST_UNVERIFIED — do not enable without evidence');
+  for (const [key,description] of [
+    ['eligibilityAttestedUntil','ELIGIBILITY_ATTESTATION_MISSING'],
+    ['exclusiveOrgTrafficAttestedUntil','TRAFFIC_ISOLATION_UNVERIFIED'],
+    ['manualCostsAuditedUntil','COST_AUDIT_UNVERIFIED']]) {
+    if (!c.policy[key] || Date.parse(c.policy[key]) <= Date.now()) pending.push(description + ' — use existing evidence if still valid');
+  }
+  if (pending.length) {
+    console.log('  Pending prerequisites:');
+    for (const issue of pending) console.log('    - '+issue);
+  }
+  if (!eligible || !proxyKey || !adminKey)
+    console.log('  NEXT STEP: In your own Terminal (not an agent tool), run npm run configure:local');
+  else
+    console.log('  NEXT STEP: Start Proxy and Collector; run npm run status:local for exact readiness reasons');
+  console.log('  Details: docs/agent-install.md');
   console.log('  Official eligible model groups: ' + MODEL_DOC);
   if (unfiltered) console.log('  WARNING: Unfiltered model IDs are NOT verified complimentary. ' +
     'All requests are conservatively reserved in Premium; unsupported/paid models could incur charges.');
