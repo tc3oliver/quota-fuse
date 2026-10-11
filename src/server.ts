@@ -52,13 +52,13 @@ function parseUsage(raw: any, endpoint: string): number | null {
 /** A provably terminal generation is not necessarily a successful generation.
  * Only max_output_tokens truncation with an internally consistent, complete
  * provider usage receipt is safe to settle. No fallback to estimated usage. */
-function incompleteUsage(raw: any, outputCap: number): { total: number; receipt: {
+function incompleteUsage(raw: any, outputCap: number, expectedModel: string): { total: number; receipt: {
   responseId: string; reason: 'max_output_tokens'; inputTokens: number; outputTokens: number
 } } | null {
   if (raw?.status !== 'incomplete' || raw?.incomplete_details?.reason !== 'max_output_tokens' ||
       (raw.error !== null && raw.error !== undefined) ||
       typeof raw.id !== 'string' || !/^resp_[a-zA-Z0-9_-]{3,128}$/.test(raw.id) ||
-      typeof raw.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(raw.model)) return null;
+      typeof raw.model !== 'string' || raw.model !== expectedModel) return null;
   const u = raw.usage;
   if (!u || typeof u !== 'object' || Array.isArray(u)) return null;
   const input = u.input_tokens, output = u.output_tokens, total = u.total_tokens;
@@ -214,7 +214,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
                     }
                     terminal = 'completed';
                   } else {
-                    incompleteReceipt = incompleteUsage(parsed.response, maxOutput);
+                    incompleteReceipt = incompleteUsage(parsed.response, maxOutput, approved.model as string);
                     if (!incompleteReceipt) throw new Error('Unverified incomplete response usage');
                     finalUsage = incompleteReceipt.total;
                     terminal = 'incomplete';
@@ -244,7 +244,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
             const text = await readLimited(upstream, 8 * 1024 * 1024);
             const parsed = JSON.parse(text);
             if (parsed?.status === 'incomplete') {
-              const incomplete = incompleteUsage(parsed, maxOutput);
+              const incomplete = incompleteUsage(parsed, maxOutput, approved.model as string);
               if (!incomplete) throw new Error('Unverified incomplete response usage');
               ledger.complete(key, incomplete.total, incomplete.receipt);
               finished = true;

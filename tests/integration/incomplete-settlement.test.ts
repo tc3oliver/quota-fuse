@@ -115,6 +115,7 @@ test('invalid, missing, inconsistent or unsupported incomplete usage never relea
     {...reply(),usage:{input_tokens:11,output_tokens:16,total_tokens:27,output_tokens_details:{reasoning_tokens:17}}},
     {...reply(),incomplete_details:{reason:'content_filter'}},
     {...reply(),id:undefined},
+    {...reply(),model:'different-premium-model'},
     {...reply(),status:'failed'},
     {...reply(),error:{code:'upstream_error',message:'provider failed'}},
   ];
