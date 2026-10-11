@@ -45,8 +45,16 @@ function schema(value: unknown, label: string): ObjectValue {
   if (!record(value) || value.type !== 'object') fail(label + ' requires an object JSON schema');
   const encoded = JSON.stringify(value);
   if (encoded.length > 32768) fail(label + ' schema too large');
-  // Only declarative JSON schema. These references must not fetch external files.
-  if (/"\\$ref"\s*:\s*"(?!(?:#\/|#"))/.test(encoded)) fail('External schema references prohibited');
+  // Reject external references and deeply recursive schemas. Never fetch schema URLs.
+  const visit=(node: unknown, depth=0): void => {
+    if (depth>32) fail('Schema nesting too deep');
+    if (Array.isArray(node)) for (const v of node) visit(v,depth+1);
+    else if (record(node)) for (const [k,v] of Object.entries(node)) {
+      if (k==='$ref' && (typeof v !== 'string' || !v.startsWith('#/'))) fail('External schema references prohibited');
+      visit(v,depth+1);
+    }
+  };
+  visit(value);
   return value as ObjectValue;
 }
 function textFormat(config: Config, v: unknown, now: Date): ObjectValue {
@@ -60,6 +68,7 @@ function textFormat(config: Config, v: unknown, now: Date): ObjectValue {
   if (f.type === 'json_schema') {
     keys(f, ['type','name','schema','strict','description'], 'text.format');
     if (!functionName(f.name) || f.strict !== true) fail('Strict named JSON schema required');
+    schema(f.schema, 'structured output');
     if (f.description !== undefined) boundedText(f.description,'schema description',true);
     return {format: f};
   }
@@ -219,7 +228,7 @@ export function validateRequest(config: Config, endpoint: string, raw: unknown, 
       if (!['none','auto','required'].includes(choice)) fail('Unknown tool_choice');
     } else if (record(choice)) {
       keys(choice,['type','name'],'tool_choice');
-      if (choice.type !== 'function' || !functionName(choice.name) || !(approved.tools as ObjectValue[]).some(t=>t.name===choice.name)) fail('Unapproved tool_choice');
+      if (choice.type !== 'function' || !functionName(choice.name) || !Array.isArray(approved.tools) || !(approved.tools as ObjectValue[]).some(t=>t.name===choice.name)) fail('Unapproved tool_choice');
     } else fail('Invalid tool_choice');
     approved.tool_choice=choice;
   }

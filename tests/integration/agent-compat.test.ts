@@ -30,7 +30,7 @@ async function start(opts: {functions?: boolean;structured?: boolean;mode?: 'tex
     const reply=opts.mode==='call'?callOutput():textOutput();
     if(opts.mode==='stream') return new Response('event: response.created\ndata: {"type":"response.created"}\n\n'+
       'event: response.output_text.delta\ndata: {"delta":"ok"}\n\n'+
-      'event: response.completed\ndata: '+JSON.stringify({response:reply})+'\n\n',{status:200,headers:{'content-type':'text/event-stream'}});
+      'event: response.completed\ndata: '+JSON.stringify({response:reply})+'\n\ndata: [DONE]\n\n',{status:200,headers:{'content-type':'text/event-stream'}});
     return new Response(JSON.stringify(reply),{status:200});
   }) as typeof fetch;
   const server=makeServer(c,l,{fetchImpl:f});
@@ -145,5 +145,18 @@ test('Chat local tool results map to function_call_output, hosted tools reject',
     assert.equal(j.choices[0].finish_reason,'tool_calls');
     assert.equal(j.choices[0].message.tool_calls[0].function.name,'read_file');
     assert.equal(h.seen[0].body.tools[0].name,'read_file');
+  }finally{await h.close();}
+});
+
+test('external JSON schema reference and unsupported chat function mode are rejected',async()=>{
+  const h=await start({structured:true,functions:true});
+  try {
+    const external={model,input:'json please',max_output_tokens:64,
+      text:{format:{type:'json_schema',name:'Unsafe',strict:true,schema:{type:'object',properties:{x:{$ref:'https://example.com/schema.json'}}}}}};
+    assert.equal((await send(h.base,external)).status,403);
+    const chat={model,messages:[{role:'user',content:'hello'}],max_completion_tokens:32,
+      tool_choice:{type:'function',function:{name:'missing'}}};
+    assert.equal((await send(h.base,chat,'/v1/chat/completions')).status,403);
+    assert.equal(h.seen.length,0);
   }finally{await h.close();}
 });

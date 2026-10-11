@@ -183,7 +183,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
                 }
                 if (event === 'response.failed' || event === 'response.incomplete') throw new Error('Incomplete response');
                 if (clientMode === 'chat') {
-                  const delta = chatStreamDelta(event, data ? JSON.parse(data) : null, approved.model as string);
+                  const delta = chatStreamDelta(event, data && data !== '[DONE]' ? JSON.parse(data) : null, approved.model as string);
                   if (delta && !res.write(delta)) await once(res, 'drain');
                 }
               }
