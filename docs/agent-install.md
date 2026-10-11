@@ -185,3 +185,14 @@ model filter **unrestricted** or **whitelist**, key-presence only, status of
 Proxy/Collector/Adapter, READY/PAUSED with exact reason, OpenCode E2E result
 and outstanding actions. Ask a single next question only when an answer
 is required to continue.
+
+## Upgrade safety: model accounting and dispatched UNKNOWN
+
+Fresh configs classify the 33 explicitly documented incentive model IDs
+into their respective groups, without a whitelist. Existing ledgers retain
+Premium-only accounting; **do not rewrite the policy fingerprint or migrate
+a running Ledger to the new `official_v1` mode**. Unknown models are not
+certified free. Read [the recovery runbook](runbook.md#reviewed-dispatched-unknown-at-utc-rollover)
+for strict terminal-response evidence requirements, a full UTC-day billing
+cooldown, and an audited dispatched-day UNKNOWN review. Do not automatically
+execute reconciliation or alter any real ledger without explicit approval.

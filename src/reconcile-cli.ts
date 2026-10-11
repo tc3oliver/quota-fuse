@@ -2,13 +2,20 @@ import { loadConfig } from './config.ts';
 import { Ledger } from './ledger.ts';
 import { acquireInstanceLock } from './instance-lock.ts';
 
-const [action,key,operator,...evidenceParts] = process.argv.slice(2);
-if (action !== 'preflight-zero' || !key || !operator || !evidenceParts.length) {
-  console.error('Usage: npm run reconcile -- preflight-zero <idempotency-key> <operator> <audited-evidence-reference>');
+const [action,key,operator,...rest] = process.argv.slice(2);
+const dispatched = action === 'dispatched-day-bounded';
+const terminalAt = dispatched ? rest[0] : undefined;
+const acknowledgement = rest[1];
+const evidence = dispatched ? rest.slice(2).join(' ') : rest.join(' ');
+const preflight = action === 'preflight-zero';
+if (!key || !operator || !(preflight || dispatched) ||
+    (preflight ? evidence.length < 20 : !terminalAt || acknowledgement !== '--attest-finalized-usage-and-costs' || evidence.length < 80)) {
+  console.error('Usage: npm run reconcile -- preflight-zero <key> <operator> <evidence-ref>');
+  console.error('OR: npm run reconcile -- dispatched-day-bounded <key> <operator> <terminal-response-UTC-ISO> --attest-finalized-usage-and-costs <detailed-request-logs-and-usage-costs-evidence>');
+  console.error('The dispatched option is ONLY for a proven same-old-day terminal response, >=24h after that day ended.');
   process.exitCode = 2;
 } else {
   const config = loadConfig();
-  // Requires the proxy to be STOPPED; prevents a live request racing manual action.
   const unlock = acquireInstanceLock(config.server.storage, 'proxy');
   let unlockCollector: (() => void) | null = null;
   try {
@@ -16,10 +23,15 @@ if (action !== 'preflight-zero' || !key || !operator || !evidenceParts.length) {
     const ledger = new Ledger(config.server.storage, { recoverPending: false });
     try {
       ledger.verifyPolicy(config);
-      // Explicit operator maintenance stop; no concurrently running collector may unpause it.
+      // Maintenance stop; distinct audited operations, no implicit unpause.
       ledger.setPause('MANUAL_REVIEW');
-      ledger.reconcilePreflight(key, operator, evidenceParts.join(' '));
-      console.log('Preflight-only UNKNOWN reconciled; review audit trail before restarting collector.');
+      if (preflight) {
+        ledger.reconcilePreflight(key, operator, evidence);
+        console.log('Preflight-only UNKNOWN reconciled; review audit trail before restarting collector.');
+      } else {
+        ledger.reviewDispatchedDay(key, operator, terminalAt!, evidence);
+        console.log('Prior-day DISPATCHED UNKNOWN reviewed: original UNKNOWN and full reservation retained. Re-run collector and check READY.');
+      }
     } finally { ledger.close(); }
   } finally { unlockCollector?.(); unlock(); }
 }

@@ -45,9 +45,12 @@ Do not ask for model IDs. By default both model lists are empty:
 ```
 
 **Both model lists empty means no model-ID whitelist**, not that all models
-are eligible for the free Data Sharing offer. The Proxy and Collector count
-every request in this mode against the smaller **Premium** pool, regardless
-of which group the model actually belongs to. This is conservative for
+are eligible for the free Data Sharing offer. For fresh installs using `modelGroupAccounting: "official_v1"`, the
+Proxy and Collector independently map **exact documented** model IDs to
+Premium or Economy. All unknown IDs conservatively count against Premium.
+Existing config without this versioned option keeps its prior Premium-only
+accounting and original SQLite policy fingerprint. **Neither mode proves
+a model is free.** This is conservative for
 token *quantity* but does **not** prevent billing if an ineligible or paid
 model is used. Only officially covered models and API request shapes are
 eligible for complimentary tokens.
@@ -80,3 +83,13 @@ Organization `OPENAI_ADMIN_KEY` in `.env.collector`. The default
 `FREE_ONLY` admission policy and billing verification are fail-closed.
 See [agent install](agent-install.md), [deployment](deployment.md), and
 [billing validation](billing-validation.md).
+
+### Accounting mode upgrade (existing installations)
+
+Existing `config.json` files without `modelGroupAccounting` are intentionally
+**NOT** automatically upgraded. Their already-recorded Premium-only Usage
+baselines cannot be relabeled mid-day without false accounting errors.
+Changing the option to `official_v1` changes the SQLite policy fingerprint
+and deliberately fails closed until a separate audited migration is reviewed.
+There is no auto-migration or history deletion. New installations default to
+`official_v1` without requiring a model whitelist.

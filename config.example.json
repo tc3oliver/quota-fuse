@@ -11,7 +11,8 @@
   },
   "dataSharing": {
     "projectId": "proj_SELECT_EXISTING_PROJECT_ID",
-    "tier": "build"
+    "tier": "build",
+    "modelGroupAccounting": "official_v1"
   },
   "policy": {
     "mode": "FREE_ONLY",

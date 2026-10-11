@@ -1,6 +1,7 @@
 import type { Config, Group } from './config.ts';
 import { utcDay, unrestrictedModels } from './config.ts';
 import { Ledger, LedgerError } from './ledger.ts';
+import { groupForUnrestrictedModel } from './model-groups.ts';
 
 export interface CollectOptions { fetchImpl?: typeof fetch; now?: Date; adminKey?: string }
 function whole(v: unknown): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0; }
@@ -44,7 +45,7 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
           // Unknown/other project usage may consume the same organization-level incentive: pause.
           if (!row || row.project_id !== config.dataSharing.projectId || typeof row.model !== 'string') throw new Error('Unattributed or side-channel usage detected');
           // Mirror admission accounting when no model-to-tier mapping exists.
-          const group = openMode ? 'premium' : groups.get(row.model);
+          const group = openMode ? (config.dataSharing.modelGroupAccounting === 'official_v1' ? groupForUnrestrictedModel(row.model) : 'premium') : groups.get(row.model);
           if (!group) throw new Error('Model outside the optional whitelist observed in org usage');
           if (!whole(row.input_tokens) || !whole(row.output_tokens)) throw new Error('Untrustworthy official token count');
           sums[group] += row.input_tokens + row.output_tokens;

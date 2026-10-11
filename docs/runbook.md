@@ -47,6 +47,49 @@ See [billing-validation.md](billing-validation.md) before enabling any actual Op
 
 Changes to project, Data Sharing tier, model allowlists, safety caps, or token counter modes also fail closed via the persisted policy fingerprint. A persistent previous-day PENDING/UNKNOWN causes new-day requests to fail closed. Without an audited resolution there is no safe self-service bypass. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
 
+## Reviewed DISPATCHED UNKNOWN at UTC rollover
+
+A generation response that has already reached a **terminal status before UTC
+midnight**, but whose usage could not be trusted, may be bounded to its original
+day after a separate, independent accounting review. **This is not a way to
+release an ambiguous network timeout or an unverified request.** If the server
+did not positively observe a terminal response *that day*, keep UNKNOWN and
+PAUSED and obtain provider-specific proof before attempting review.
+
+The new `dispatched-day-bounded` operation is deliberately restricted:
+- The reservation must remain `UNKNOWN / DISPATCHED`; it is **never**
+  converted to COMPLETED, never given `actual=0`, and its entire reserve is
+  retained on the original day.
+- Evidence must identify the request, terminal response timestamp and status,
+  complete and fully settled old-day **and new-day** official Usage, reviewed
+  Costs, absence of other project/bypass traffic, and an external audit ticket.
+  Official aggregation/Costs can be delayed; a positive `payer=openai`
+  marker alone does not prove final accounting.
+- At least **24 hours must pass after the old UTC day ends** before a review;
+  even then, the operator must independently determine that reports are final.
+  Both new-day group baselines must be current and complete.
+- Stop **both** Proxy and Collector first. The reconciliation command takes
+  both instance locks and requires `MANUAL_REVIEW`. If it fails, remain
+  PAUSED. Make encrypted durable backups **outside /tmp** first.
+- No replay of the same idempotency key is permitted. Any other unresolved
+  old-day reservation still blocks the new day. After success, restart the
+  Collector and verify the current-day baseline and `/health/ready`.
+
+Example syntax (**do not run without the above evidence or user approval**):
+
+```bash
+npm run reconcile -- dispatched-day-bounded live-trial-000001 operator-id \
+  2026-10-11T12:34:56Z --attest-finalized-usage-and-costs \
+  'Audit ticket URL, full original response log/request ID, terminal status, original and next UTC-day Usage totals, verified Costs, project isolation evidence and review date'
+```
+
+This command records a separate immutable `dispatched_day_reviews` row and
+`reconciliation_audit` entry. The original reservation remains UNKNOWN with
+its entire `reserved` amount. The review only exempts this *proven bounded*
+request from **cross-day** blocking; it does not forgive billing, weaken
+same-day bounds or allow other unknown outcomes. Never fabricate a terminal
+timestamp to override the safety gate.
+
 ## Checks
 
 ```bash

@@ -34,6 +34,7 @@ export class Ledger {
     if (!columns('observations').includes('anchor_tokens')) this.db.exec('ALTER TABLE observations ADD COLUMN anchor_tokens INTEGER CHECK(anchor_tokens >= 0)');
     if (!columns('reservations').includes('phase')) this.db.exec("ALTER TABLE reservations ADD COLUMN phase TEXT NOT NULL DEFAULT 'DISPATCHED' CHECK(phase IN ('PREFLIGHT','DISPATCHED'))");
     this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/002_reconciliation.sql'), 'utf8'));
+    this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/003_dispatched_day_reviews.sql'), 'utf8'));
     this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA synchronous = FULL;');
     if (options.recoverPending !== false) this.recoverPending();
   }
@@ -58,7 +59,11 @@ export class Ledger {
       outputCap: config.policy.maxOutputTokens, accountMargin: config.policy.accountMargin,
       counter: config.policy.inputCounter,
       structuredTextVerified: config.policy.structuredTextVerified === true,
-      localAgentTools: true });
+      localAgentTools: true,
+      // Backward-compatible fingerprint: existing ledgers keep legacy
+      // premium-only classification until an audited policy transition.
+      ...(config.dataSharing.modelGroupAccounting === 'official_v1'
+        ? {modelGroupAccounting:'official_v1'} : {}) });
     return createHash('sha256').update(canonical).digest('hex');
   }
   verifyPolicy(config: Config): void {
@@ -164,8 +169,65 @@ export class Ledger {
   hasCrossDayUnknown(day: string): boolean {
     // PENDING requests are also unsafe across UTC rollover: their upstream usage
     // may be attributed to either day, and no new-day budget is released until review.
-    const row = this.db.prepare("SELECT COUNT(*) AS n FROM reservations WHERE utc_day<? AND state IN ('PENDING','UNKNOWN','MANUAL_REVIEW')").get(day) as any;
+    // An audited same-day terminal response can establish that a specific
+    // dispatched UNKNOWN belongs entirely to its original UTC day. The row
+    // stays UNKNOWN and its entire old-day upper bound stays reserved.
+    // Other UNKNOWN, PREFLIGHT, PENDING and MANUAL_REVIEW always block.
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM reservations AS r
+      LEFT JOIN dispatched_day_reviews AS d ON d.idempotency_key = r.idempotency_key
+      WHERE r.utc_day < ? AND r.state IN ('PENDING','UNKNOWN','MANUAL_REVIEW')
+        AND NOT (r.state='UNKNOWN' AND r.phase='DISPATCHED'
+          AND d.idempotency_key IS NOT NULL AND d.utc_day=r.utc_day
+          AND d.reserved=r.reserved)`).get(day) as any;
     return row.n > 0;
+  }
+  /**
+   * Audited day-boundary recovery ONLY when independently evidenced that the
+   * dispatched request reached a terminal response BEFORE old-day midnight.
+   * This never settles, deletes or releases the UNKNOWN; it only makes its
+   * conservative old-day reservation safe to leave in that day.
+   * Caller must hold BOTH proxy/collector instance locks.
+   */
+  reviewDispatchedDay(key: string, operator: string, terminalObservedAt: string, evidence: string, now = new Date()): void {
+    if (!/^[a-zA-Z0-9_.@-]{3,100}$/.test(operator) ||
+        evidence.trim().length < 80 || evidence.length > 4096 ||
+        !Number.isFinite(Date.parse(terminalObservedAt)) || now.getTime() > Date.now() + 5000)
+      throw new LedgerError('INVALID_EVIDENCE', 'Named reviewer, UTC terminal timestamp and detailed independent evidence required');
+    this.tx(() => {
+      if (!this.isPaused()) throw new LedgerError('PAUSE_REQUIRED', 'Stop and pause services before audited rollover review');
+      const r = this.find(key);
+      if (!r || r.state !== 'UNKNOWN' || r.phase !== 'DISPATCHED')
+        throw new LedgerError('INVALID_TRANSITION', 'Only dispatched UNKNOWN requests qualify; request remains UNKNOWN');
+      const start = Date.parse(r.utc_day + 'T00:00:00Z');
+      const terminal = Date.parse(terminalObservedAt);
+      const admitted = Date.parse((this.db.prepare('SELECT admitted_at FROM reservations WHERE idempotency_key=?').get(key) as {admitted_at:string}).admitted_at);
+      const updated = Date.parse((this.db.prepare('SELECT updated_at FROM reservations WHERE idempotency_key=?').get(key) as {updated_at:string}).updated_at);
+      if (!Number.isFinite(admitted) || !Number.isFinite(updated) ||
+          admitted < start || admitted >= start + 86400000 ||
+          terminal < admitted || terminal >= start + 86400000 ||
+          updated < terminal || updated >= start + 86400000)
+        throw new LedgerError('DAY_BOUNDARY_UNVERIFIED', 'Terminal response and UNKNOWN recording must both be within original UTC day');
+      // A full UTC day of billing/usage delay is reserved for an independent
+      // review of request-specific logs, old/new day Usage, and actual Costs.
+      if (now.getTime() < start + 2 * 86400000)
+        throw new LedgerError('AUDIT_COOLDOWN', 'At least 24 hours after old UTC day closes is required');
+      if (!this.observation(r.utc_day,r.group_name)?.anchor_tokens && this.observation(r.utc_day,r.group_name)?.anchor_tokens !== 0)
+        throw new LedgerError('ANCHOR_UNVERIFIED', 'Original UTC-day baseline missing');
+      for (const group of ['premium','economy'] as const) {
+        const obs = this.observation(utcDay(now),group);
+        if (!obs || obs.anchor_tokens === null || now.getTime()-Date.parse(obs.reconciled_at) > 300000 ||
+            now.getTime() < Date.parse(obs.reconciled_at))
+          throw new LedgerError('COLLECTOR_UNVERIFIED', 'Fresh new-day official baselines required for both groups');
+      }
+      const existing = this.db.prepare('SELECT idempotency_key FROM dispatched_day_reviews WHERE idempotency_key=?').get(key);
+      if (existing) throw new LedgerError('DUPLICATE_REVIEW', 'Rollover review already recorded; never overwrite evidence');
+      this.db.prepare(`INSERT INTO dispatched_day_reviews
+        (idempotency_key,utc_day,reserved,terminal_observed_at,operator,evidence,reviewed_at)
+        VALUES(?,?,?,?,?,?,?)`)
+        .run(key,r.utc_day,r.reserved,terminalObservedAt,operator,evidence,now.toISOString());
+      this.db.prepare('INSERT INTO reconciliation_audit(idempotency_key,operator,evidence,action,created_at) VALUES(?,?,?,?,?)')
+        .run(key,operator,evidence,'BOUNDED_DISPATCHED_UNKNOWN_OLD_DAY_RETAIN_FULL_RESERVE',now.toISOString());
+    });
   }
   find(key: string): Reservation | undefined {
     return this.db.prepare('SELECT * FROM reservations WHERE idempotency_key=?').get(key) as unknown as Reservation | undefined;

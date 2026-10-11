@@ -17,7 +17,7 @@ export interface Config {
   server: { host: string; port: number; storage: string; maxRequestBytes: number; maxConcurrentRequests: number };
   upstream: { baseUrl: string };
   /** Explicitly selected Data Sharing project and operator-confirmed org tier. */
-  dataSharing: { projectId: string; tier: DataSharingTier };
+  dataSharing: { projectId: string; tier: DataSharingTier; modelGroupAccounting?: 'official_v1' };
   policy: {
     mode: 'FREE_ONLY'; safetyPct: number; maxOutputTokens: number; accountMargin: number;
     inputCounter: 'reject' | 'responses_preflight'; preflightCostVerified: boolean;
@@ -36,6 +36,8 @@ export function validateConfig(c: Config): Config {
   if (Object.hasOwn(c.upstream, 'projectId')) throw new Error('Move upstream.projectId to dataSharing.projectId; do not configure conflicting project sources');
   if (!c.dataSharing || !Object.hasOwn(DATA_SHARING_LIMITS, c.dataSharing.tier))
     throw new Error('Explicit Data Sharing tier required (build, launch, or grow)');
+  if (c.dataSharing.modelGroupAccounting !== undefined && c.dataSharing.modelGroupAccounting !== 'official_v1')
+    throw new Error('Unknown model-group accounting version');
   if (typeof c.dataSharing.projectId !== 'string' || !/^proj_[a-zA-Z0-9_-]{3,}$/.test(c.dataSharing.projectId))
     throw new Error('Dedicated Data Sharing project ID must begin with proj_');
   if (c.policy.safetyPct < 1 || c.policy.safetyPct > 85 || !Number.isInteger(c.policy.safetyPct)) throw new Error('Safety percentage must be 1-85');
