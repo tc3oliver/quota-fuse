@@ -1,5 +1,8 @@
 # Quota Guard Proxy — Technical Specification
 
+> **Implementation note:** This document is the original design target, not a claim that every feature is shipped. Current v0.1 uses Node.js native HTTP (not Fastify), JSON-only runtime config (not YAML), and denies Chat Completions/function calling pending verified token accounting. Consult [README](README.md), [billing validation](docs/billing-validation.md), and [test matrix](docs/test-matrix.md) for tested functionality and NO-GO limitations.
+
+
 - 版本：v0.1（實作規格）
 - 日期：2026-10-11
 - 優先級：P0 防止意外計費 > P1 OpenAI-compatible 相容性 > P2 多模型 Router 整合
