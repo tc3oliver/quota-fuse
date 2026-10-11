@@ -16,9 +16,12 @@ Only `/health/live` is unauthenticated. All other endpoints require `Authorizati
 
 ## Example: standalone text request
 
-Only send requests after completing [billing validation](billing-validation.md). Copy the generated token from your private `.env.proxy` into your **local client**, not a public script. Replace the example model with an exact, verified model ID configured in your allowlist.
+Only send requests after completing [billing validation](billing-validation.md). The request below uses the local token generated in `.env.proxy` without loading the separate Admin key. Run these commands from the repository root in a Bash or Zsh terminal. Replace the example model with an exact, verified model ID configured in your allowlist.
 
 ```bash
+# Load only the locally generated proxy token into this shell variable.
+QG_PROXY_TOKEN="$(node --env-file=.env.proxy -p 'process.env.QG_PROXY_TOKEN')"
+
 curl http://127.0.0.1:8787/v1/responses \
   -H "Authorization: Bearer ${QG_PROXY_TOKEN}" \
   -H 'X-Quota-Guard-Data-Classification: public' \
