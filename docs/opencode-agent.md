@@ -9,12 +9,16 @@ adapter shim (`examples/opencode-adapter.mjs`), never directly.
 1. **Dynamic `Idempotency-Key`.** QuotaFuse requires a *unique* key per logical
    request; reuse is rejected with `409 DUPLICATE_REQUEST`, never replayed.
    OpenCode's static provider `headers` cannot mint a fresh key per request
-   (verified against OpenCode v2.0.26: `headers` are string constants, and the
-   agent loop issues one LLM request per step plus title/summary calls). The
-   adapter stamps `Idempotency-Key: <uuid>` on every POST that lacks a valid one.
-2. **Classification attestation.** The adapter defaults
-   `X-Quota-Guard-Data-Classification: public` when the client sends none. It
-   never overrides an explicit client value.
+   (verified against OpenCode v2.0.26). The adapter assigns a key to requests
+   that lack a valid one, while reusing the same key for byte-identical HTTP
+   retries within 10 minutes. This best-effort replay guard is **not durable**
+   across adapter restarts: do not blindly retry uncertain outcomes.
+2. **Explicit public-data attestation.** QuotaFuse only permits material the
+   client deliberately classifies as `public`. The adapter **never adds**
+   `X-Quota-Guard-Data-Classification` for you. The sample OpenCode provider
+   below explicitly adds it; **only use that configuration with a public,
+   disposable test workspace**. Do not use it to process proprietary source
+   code, credentials, private documents, or other non-public data.
 3. **Bounded output.** OpenCode's title/summary calls omit
    `max_completion_tokens`; the proxy fail-closed rejects unbounded requests.
    The adapter injects a small default (`QF_DEFAULT_MAX_TOKENS`, default 256).
@@ -35,34 +39,53 @@ npm run start:local
 node examples/opencode-adapter.mjs --listen 127.0.0.1:18878 --target http://127.0.0.1:8787
 ```
 
-```jsonc // opencode.jsonc (project-local; credential is the PROXY token, not OpenAI)
+Create a project-local `opencode.jsonc` **only inside the public test fixture**.
+The real OpenCode provider fields are `provider`, `npm` and `options`
+(not `providers`, `package`, `settings`). See the
+[official OpenCode custom provider docs](https://docs.opencode.ai/docs/providers/).
+
+```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "providers": {
+  "provider": {
     "quotafuse": {
-      "name": "QuotaFuse",
-      "env": ["QUOTAFUSE_PROXY_TOKEN"],
-      "package": "@opencode/ai/providers/openai-compatible",
-      "settings": { "baseURL": "http://127.0.0.1:18878/v1" },
-      "models": {
-        "agent-model": {
-          "modelID": "YOUR_VERIFIED_MODEL_ID",
-          "limit": { "context": 32000, "output": 2048 },
-        },
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "QuotaFuse (public-only)",
+      "options": {
+        "baseURL": "http://127.0.0.1:18878/v1",
+        "apiKey": "{env:QUOTAFUSE_PROXY_TOKEN}",
+        "headers": {
+          "X-Quota-Guard-Data-Classification": "public"
+        }
       },
-    },
-  },
+      "models": {
+        "YOUR_VERIFIED_MODEL_ID": {
+          "name": "Verified Data Sharing Model",
+          "limit": { "context": 32000, "output": 2048 }
+        }
+      }
+    }
+  }
 }
 ```
 
 ```bash
 QUOTAFUSE_PROXY_TOKEN="$(node --env-file=.env.proxy -p 'process.env.QG_PROXY_TOKEN')" \
-  opencode run --standalone -m quotafuse/agent-model "your task"
+  opencode run --standalone -m quotafuse/YOUR_VERIFIED_MODEL_ID "Read the public fixture file"
 ```
 
-`modelID` must be an exact model ID from your verified `config.json` allowlist.
+The `models` key and `-m` model name must both use an exact model ID
+from your verified `config.json` allowlist. Do not set the `public` header
+in an existing private work repository. Never put real API credentials in the
+OpenCode config; `QUOTAFUSE_PROXY_TOKEN` is only the local proxy token.
 
-## Verified behaviour (mock upstream, `npm run test:agent`)
+## Verified behaviour
+
+`npm run test:agent` runs the in-process Mock HTTP harness with real
+local filesystem/subprocess tools; it **does not itself launch OpenCode**.
+A separate manual test invoked the actual OpenCode v2.0.26 binary against
+the adapter and a mocked upstream. The adapter and provider configuration
+should be retested when OpenCode changes request shapes.
 
 - Multi-turn history and local function schemas pass preflight and generation.
 - `function_call` → agent executes the tool locally (fs read, subprocess) →
@@ -73,10 +96,11 @@ QUOTAFUSE_PROXY_TOKEN="$(node --env-file=.env.proxy -p 'process.env.QG_PROXY_TOK
   zero upstream calls; quota exhaustion, upstream errors and timeouts stay
   fail-closed (`UNKNOWN` reservations are never auto-retried).
 
-A live end-to-end run with the real OpenCode binary (mock upstream) completed a
-genuine local `read` tool execution through proxy + adapter. HTTP-mock loop
-tests and the real-binary run are reported separately; mock results are never
-presented as real-binary success.
+The prior manual OpenCode binary run completed a genuine local `read` tool
+execution through proxy + adapter + mock upstream. That result is distinct
+from the automated mock loop suite; it does not establish live API or billing
+safety. After changing the classification requirement, the OpenCode config
+must explicitly supply the `public` header as shown above.
 
 ## Billing caveat
 

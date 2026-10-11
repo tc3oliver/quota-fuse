@@ -9,18 +9,25 @@
  * mint a fresh key per request, so this tiny shim sits between OpenCode and
  * the proxy on 127.0.0.1 and stamps those headers per HTTP request.
  *
- * It never sees your OpenAI keys: Authorization passes through untouched, and
- * it only forwards to the local QuotaFuse proxy (default http://127.0.0.1:8787).
+ * It never sees OpenAI project/Admin keys: Authorization passes through
+ * untouched as the QuotaFuse proxy token, and it only forwards to the local
+ * QuotaFuse proxy (default http://127.0.0.1:8787).
+ * If the client retries a byte-identical POST within 10 minutes, the adapter
+ * reuses its idempotency key so QuotaFuse rejects duplicate dispatch. That
+ * best-effort guard is not durable across restarts: never blindly retry an
+ * uncertain request, including after an adapter restart.
  *
  * Usage:
  *   node examples/opencode-adapter.mjs [--listen 127.0.0.1:18878] [--target http://127.0.0.1:8787]
  *   QF_DEFAULT_MAX_TOKENS=256 node examples/opencode-adapter.mjs
  *
  * Then point OpenCode at http://127.0.0.1:18878/v1 with your QG_PROXY_TOKEN
- * as the provider credential. See docs/opencode-agent.md.
+ * as the provider credential. The agent MUST explicitly attest public-only
+ * request data in its provider headers; this adapter never silently labels
+ * arbitrary workspace files as public. See docs/opencode-agent.md.
  */
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
@@ -30,8 +37,39 @@ const opt = (name, fallback) => {
 const [listenHost, listenPort] = (opt('--listen', '127.0.0.1:18878')).split(':');
 const target = new URL(opt('--target', process.env.QF_TARGET ?? 'http://127.0.0.1:8787'));
 const defaultMaxTokens = Number(process.env.QF_DEFAULT_MAX_TOKENS ?? '256');
-if (target.hostname !== '127.0.0.1' || (target.protocol !== 'http:' && target.protocol !== 'https:'))
-  throw new Error('Refusing non-local adapter target');
+const maxBodyBytes = 2 * 1024 * 1024; // never buffer more than QuotaFuse's default maxRequestBytes
+if (listenHost !== '127.0.0.1' || !Number.isInteger(Number(listenPort)) ||
+    Number(listenPort) < 1 || Number(listenPort) > 65535)
+  throw new Error('Adapter must bind to a valid 127.0.0.1 port');
+if (target.hostname !== '127.0.0.1' || target.protocol !== 'http:' ||
+    target.username || target.password || target.search || target.hash || target.pathname !== '/')
+  throw new Error('Adapter only forwards to a local HTTP QuotaFuse origin');
+if (!Number.isSafeInteger(defaultMaxTokens) || defaultMaxTokens < 1 || defaultMaxTokens > 4096)
+  throw new Error('QF_DEFAULT_MAX_TOKENS must be an integer between 1 and 4096');
+ 
+// A blind HTTP retry does not necessarily mean a new logical model request.
+// Reuse the same admission key for identical requests within a short window:
+// QuotaFuse will respond 409 after the first admission rather than double-dispatch.
+// This in-memory protection is NOT durable across adapter restarts.
+const replayWindowMs = 10 * 60 * 1000;
+const replayKeys = new Map(); // fingerprint -> {key, expires}
+function admissionKey(req, body, headers) {
+  const fingerprint = createHash('sha256')
+    .update(req.method ?? '').update('\0').update(req.url ?? '').update('\0')
+    .update(typeof headers.authorization === 'string' ? headers.authorization : '')
+    .update('\0').update(body).digest('hex');
+  const now = Date.now();
+  const seen = replayKeys.get(fingerprint);
+  if (seen && seen.expires > now) return seen.key;
+  if (replayKeys.size >= 10000) {
+    for (const [f, entry] of replayKeys) if (entry.expires <= now) replayKeys.delete(f);
+    // Never evict an active key and risk treating an old retry as new.
+    if (replayKeys.size >= 10000) return null;
+  }
+  const key = randomUUID();
+  replayKeys.set(fingerprint, { key, expires: now + replayWindowMs });
+  return key;
+}
 
 const KEY_RE = /^[a-zA-Z0-9._:-]{8,128}$/;
 
@@ -43,19 +81,26 @@ const server = http.createServer((clientReq, clientRes) => {
     return;
   }
   const chunks = [];
-  clientReq.on('data', (c) => chunks.push(c));
+  let received = 0, tooLarge = false;
+  clientReq.on('data', (c) => {
+    received += c.length;
+    if (received > maxBodyBytes) {
+      if (!tooLarge) {
+        tooLarge = true;
+        clientRes.writeHead(413, { 'Content-Type': 'application/json' });
+        clientRes.end('{"error":"request body too large"}');
+      }
+    } else if (!tooLarge) chunks.push(c);
+  });
   clientReq.on('end', () => {
+    if (tooLarge) return;
     const raw = Buffer.concat(chunks);
     const headers = { ...clientReq.headers };
     delete headers.host;
     delete headers['content-length'];
-    // Per-request uniqueness: QuotaFuse rejects key reuse, so a static
-    // configured header can never work for an agent loop. Mint one per POST
-    // unless the client already supplied a valid stable key.
-    if (clientReq.method === 'POST' && (typeof headers['idempotency-key'] !== 'string' || !KEY_RE.test(headers['idempotency-key'])))
-      headers['idempotency-key'] = randomUUID();
-    if (typeof headers['x-quota-guard-data-classification'] !== 'string')
-      headers['x-quota-guard-data-classification'] = 'public';
+    // Never invent a public-data classification: the calling agent/user
+    // must explicitly attest that the material is safe for Data Sharing.
+    // The upstream QuotaFuse policy rejects requests missing that header.
     let body = raw;
     // OpenCode's title/summary calls omit max_completion_tokens; QuotaFuse
     // fail-closed requires an explicit bound, so apply a small default.
@@ -67,6 +112,19 @@ const server = http.createServer((clientReq, clientRes) => {
           body = Buffer.from(JSON.stringify(parsed));
         }
       } catch { /* leave body untouched; proxy will return 400 */ }
+    }
+    // Mint a stable key for the logical request after applying any title cap.
+    // A byte-identical retry within the replay window reuses this key and
+    // therefore cannot silently dispatch a second generation.
+    if (clientReq.method === 'POST' &&
+        (typeof headers['idempotency-key'] !== 'string' || !KEY_RE.test(headers['idempotency-key']))) {
+      const key = admissionKey(clientReq, body, headers);
+      if (key === null) {
+        clientRes.writeHead(503, { 'Content-Type': 'application/json' });
+        clientRes.end('{"error":"adapter replay guard full; failing closed"}');
+        return;
+      }
+      headers['idempotency-key'] = key;
     }
     const upstream = http.request({
       hostname: target.hostname, port: target.port || (target.protocol === 'https:' ? 443 : 80),
