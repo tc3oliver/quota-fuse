@@ -6,7 +6,7 @@ This page is for contributors and reviewers. See the [README](../README.md) for 
 
 The first version uses Node.js native HTTP and `node:sqlite` with TypeScript's built-in type stripping; it does not use Fastify. The SQLite API on Node.js 22 is experimental. The project is designed for one local process and a distinct Admin Usage collector, not a distributed quota service.
 
-The current contract handles text-only Responses API inputs. Chat Completions, tool calls, multimodal, persistent conversation state and live OMP provider compatibility are unverified. These interfaces are intentionally blocked instead of silently activating paid features.
+The current contract supports stateless text-only Responses arrays and a bounded Chat JSON/SSE adapter. Local functions and structured JSON formats require separate, expiring billing eligibility checks before real upstream requests; hosted tools and multimodal are still blocked. End-to-end OMP/OpenCode compatibility is not yet verified.
 
 ## Development commands
 

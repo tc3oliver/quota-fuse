@@ -135,7 +135,7 @@ Base URL: http://127.0.0.1:8787/v1
 Auth:      Bearer <QG_PROXY_TOKEN from .env.proxy>
 ```
 
-The supported request format is **standalone text-only `POST /v1/responses`** (JSON and streaming). Clients must include a stable `Idempotency-Key`, `X-Quota-Guard-Data-Classification: public`, and a bounded `max_output_tokens`. The `/v1/chat/completions` route, function tools, multimodal input and stored conversations are not available yet. See [API examples and error codes](docs/usage.md).
+QuotaFuse supports **stateless multi-turn text** with Responses and a bounded **Chat Completions** adapter (JSON/SSE). Client-defined functions and structured JSON formats are implemented but remain **disabled until separately audited for Data Sharing billing**. Hosted tools, remote MCP, image/audio, and stored conversations stay blocked. All requests require a stable `Idempotency-Key`, public-data classification and an explicit output cap. See [supported formats and capability gates](docs/usage.md).
 
 ## Guides
 

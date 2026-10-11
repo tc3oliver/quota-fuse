@@ -6,7 +6,8 @@ The local proxy listens on `http://127.0.0.1:8787` by default. It is not a trans
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /v1/responses` | Standalone text-only response; JSON or SSE |
+| `POST /v1/responses` | Stateless multi-turn text; optional separately audited local functions/JSON output; JSON/SSE |
+| `POST /v1/chat/completions` | Bounded text-only Chat adapter to Responses; JSON/SSE |
 | `GET /v1/models` | Manually verified, currently allowed model IDs |
 | `GET /quota` | Guarded local capacity estimate (not official free balance) |
 | `GET /health/live` | Process liveness |
@@ -36,7 +37,15 @@ For streaming, set `"stream":true`. QuotaFuse forwards SSE messages and settles 
 
 ## Unsupported input
 
-At this stage `/v1/chat/completions`, tool/function calling, hosted tools, multimodal input, stored conversation state, arbitrary endpoints and requests without explicit output caps are rejected. QuotaFuse does not change models, strip unsupported tools or retry paid API calls to make them succeed.
+Stateless Responses requests may include text message arrays with roles `system`, `developer`, `user` and `assistant`. Provide the full history each turn. The restricted Chat endpoint accepts `messages`, `max_completion_tokens` and `n=1`, translating into Responses and its input-token counter.
+
+Local Agent functions use Responses `tools` with `type:"function"`, plus `function_call` and `function_call_output` items across turns. The Agent executes its own Bash, files, git and MCP tools; QuotaFuse never executes tools. OpenAI-hosted tools and remote MCP are always rejected.
+
+**Function Calling eligibility is not established:** OpenAI's complimentary Data Sharing terms exclude tool use. To prevent unexpected charges, `policy.localFunctionsVerified` and `policy.localFunctionsAttestedUntil` are **false/null by default**. Operators must privately establish account-specific eligibility and costs before enabling. No automatic enablement is permitted.
+
+JSON object/schema output formats have separate default-off `structuredTextVerified` / `structuredTextAttestedUntil` gates pending format-specific billing audit. These safety gates require explicit policy review and a compatible SQLite policy fingerprint.
+
+Multimodal input, hosted tools, stored conversations, unsupported Chat options, unbounded outputs and unverified model IDs remain blocked. A full arbitrary OpenAI SDK or Coding Agent workflow is not guaranteed.
 
 ## Common errors
 
