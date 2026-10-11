@@ -22,66 +22,73 @@ Requires **Node.js 22.13+**, npm, and a local machine or VM. Docker and remote l
 git clone https://github.com/tc3oliver/quota-fuse.git
 cd quota-fuse
 npm ci
-npm run setup
+npm run onboard
 ```
 
 Setup creates three **Git-ignored**, owner-readable files without overwriting existing settings:
 
 | File | What to configure |
 | --- | --- |
-| `config.json` | Data Sharing project ID, organization tier, eligible model IDs, safety policy |
+| `config.json` | Existing API routing Project ID, org tier, all eligible model IDs prefilled; optional narrower allowlist |
 | `.env.proxy` | Your project-scoped `OPENAI_API_KEY`; a random proxy access token is generated |
 | `.env.collector` | Your separate `OPENAI_ADMIN_KEY` for usage reporting |
 
 **Do not put your Admin API key in `.env.proxy`.** Keep the two processes and their credentials separate.
 
-## Set up with a coding agent (optional)
+## Zero-question onboarding
 
-You can ask **Claude Code, Codex, OpenCode or another local coding agent** to perform the installation checks and prepare your configuration. Open a terminal in the cloned `quota-fuse` directory, start your agent, and paste this prompt:
+`npm run onboard` does not ask users to manually type dozens of model IDs,
+does not call OpenAI, and does not switch on live billing admissions. On fresh
+setups it includes **all model IDs in the reviewed official Data Sharing
+complimentary-token list** (except models explicitly announced as shut down).
+These are exact IDs, not wildcard access to arbitrary paid models.
 
-```text
-Help me install and configure QuotaFuse on this computer.
+Organizations enrolled under **All projects** may select **any existing**
+Project ID for QuotaFuse API routing. A special Data Sharing-only Project is
+not required. The shared allowance is org-wide; this version's collector
+deliberately pauses on usage from other projects (one-routing-project
+limitation). Do not run unmanaged usage from other projects when relying on
+this proxy's conservative budget.
 
-Work in this repository. Read README.md, docs/deployment.md,
-docs/data-sharing-configuration.md and docs/billing-validation.md first.
-
-1. Check my OS, Node.js (>=22.13) and npm. Explain any missing prerequisites.
-2. Run npm ci and npm run setup. Never overwrite existing config.json,
-   .env.proxy, .env.collector or the SQLite database.
-3. Ask me only for NON-SECRET configuration details: the approved
-   OpenAI project ID (proj_...), organization Data Sharing tier
-   (build/launch/grow) and exact eligible model IDs. Do not guess any
-   eligibility or tier from model names. Validate configured group limits.
-4. Tell me where to enter my OpenAI project API key and separate Admin API key.
-   Have me edit .env.proxy and .env.collector locally myself; NEVER ask me
-   to paste credentials into chat, read existing secrets, print their values,
-   commit them or send them to another service.
-5. Run npm run check. Start only the local proxy with npm run start:local
-   and run npm run status:local. A fresh install MUST remain PAUSED.
-   Do not send any real OpenAI requests or run a live billing test.
-6. Report what passed, what I still need to verify in the OpenAI dashboard
-   and the exact commands for the separate collector and normal startup.
-   Do not mark preflightCostVerified=true or set future billing/eligibility
-   attestations without my explicit approval AND independent billing proof.
-
-Do not enable automatic boot services or modify system-wide settings
-without first asking me. This release does not include a service installer.
-Preserve fail-closed defaults throughout.
-
-At the very end of your setup report, offer an optional GitHub Star.
-If `gh` is installed AND already authenticated (check availability and
-`gh auth status` quietly without printing credentials), ask me:
-"Would you like to star tc3oliver/quota-fuse on GitHub? [Y/n]"
-Wait for my response. Run `gh repo star tc3oliver/quota-fuse` ONLY if I
-explicitly answer Y or yes; for n/no, a blank answer, or anything unclear,
-skip it. Do not run `gh auth login` or make me authenticate just to star.
-If `gh` is unavailable or not authenticated, simply provide this link:
-https://github.com/tc3oliver/quota-fuse
-Starring is optional. Never star automatically or make it a prerequisite
-for installation, setup, or any other task.
+```bash
+npm run doctor
+# Nonsecret details can be set once, whenever available:
+npm run onboard -- --project=proj_YOUR_EXISTING_ID --tier=launch
+# Optional: restrict to a manually selected official eligible-model subset:
+npm run onboard -- --only=gpt-6-sol,gpt-5.6-terra
+# Restore complete published catalog before an operational ledger exists:
+npm run onboard -- --only=all
 ```
 
-**You remain responsible for verifying enrollment and billing.** The agent can prepare local files and check that the service starts, but it cannot prove that the Data Sharing allowance is active or that a request will be free. See the [billing checklist](docs/billing-validation.md) before enabling traffic.
+The template starts at the conservative Build cap (250K/2.5M) until
+you confirm your actual org tier; Launch/Grow caps are 1M/10M.
+Model entries are a **snapshot** of the [official offer](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai),
+not a promise that every model is currently accessible in your Project or
+supports this proxy's restricted API shapes. Unknown models remain blocked.
+A pre-existing SQLite ledger prevents automatic project/tier/model changes:
+follow [the recovery runbook](docs/runbook.md) rather than deleting history.
+
+### Set up with a coding agent
+
+Use your already working OpenCode/Codex/Claude Code and paste:
+
+> Install or safely update tc3oliver/quota-fuse. Run npm ci, npm run onboard,
+> npm run doctor, and the offline tests. **Do not ask me for a dedicated
+> Data Sharing Project:** All projects is enabled; I can select any existing
+> API routing Project later. Use the **all eligible models default**, no
+> model questionnaire. Only narrow the allowlist if I request it. Confirm
+> my org tier if needed. Guide me to edit project and separate Admin API
+> keys **locally**, never print or copy secrets into chat. Preserve any
+> existing SQLite ledger; never force-overwrite configuration. Keep
+> eligibility/preflight/Costs/exclusivity gates fail-closed unless independently
+> verified. Do not send live OpenAI requests, enable paid fallback, or
+> install auto-start services without asking. Finish with a short list
+> of only genuinely missing steps.
+
+For live inference, the independent [billing validation](docs/billing-validation.md)
+(preflight Costs, attribution and traffic isolation), keys, collector baseline
+and explicit public-only data declaration are still required. An org Data
+Sharing enrollment check that has already been completed need not be repeated.
 
 ## Start
 

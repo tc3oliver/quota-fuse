@@ -1,6 +1,6 @@
 # Data Sharing project and tier configuration
 
-QuotaFuse protects **one explicitly selected project per SQLite ledger**. OpenAI's complimentary token limits are **organization-wide for each model group**, never per project or per model.
+QuotaFuse protects **one explicitly selected API routing project per SQLite ledger**. An OpenAI organization may have Data Sharing enabled for **All projects**; the user does not need a specially enrolled project. OpenAI's complimentary token limits are **organization-wide for each model group**, never per project or per model.
 
 Official terms: https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai
 
@@ -12,27 +12,49 @@ Official terms: https://help.openai.com/en/articles/10306912-sharing-feedback-ev
 
 The words premium/economy are **QuotaFuse model groups**, not the OpenAI usage `service_tier`, organization enrollment tier, or subscription plan.
 
-## Required configuration
+## Required configuration (no model-by-model questionnaire)
 
-Copy `config.example.json`, then set:
+Run `npm run onboard` on a fresh checkout. The shipped template
+prepopulates `quotas.*.models` with **all exact model IDs listed under the
+official Data Sharing incentive offer** as of 2026-10-11, excluding
+`gpt-4.5-preview-2025-02-27` (explicitly shut down). This is a
+**reviewed snapshot** in `config.example.json`, not a wildcard or
+proof that every model remains available. Reconcile the official offer when
+new models are published; don't enable arbitrary names as a shortcut.
 
-```json
-"dataSharing": {
-  "projectId": "proj_your_verified_project",
-  "tier": "launch"
-},
-"quotas": {
-  "premium": {"dailyTokens": 1000000, "models": []},
-  "economy": {"dailyTokens": 10000000, "models": []}
-}
+Default is **all documented eligible models**. Restrict only if the user wants
+a custom whitelist:
+
+```bash
+npm run onboard -- --only=gpt-6-sol,gpt-5.6-terra
+# Undo restriction in a fresh, unused setup:
+npm run onboard -- --only=all
 ```
 
-This JSON fragment belongs inside the full config object. Example defaults are **build** with 250K/2.5M (safer for first use). Changing tier requires reviewing the daily group caps. Values may be lower than the tier's entitlement but cannot exceed it. Populate exact model IDs only after independently validating their current eligibility; never infer them from the tier.
+For **All projects** Data Sharing, choose an existing Project for QuotaFuse's
+API routing rather than asking for a "Data Sharing-only Project":
 
-1. As an OpenAI Org Owner, enable **Share inputs and outputs with OpenAI** for the selected project in Data Controls, and independently confirm complimentary-token enrollment, organization tier, positive account balance, and eligible models in the Dashboard. Enabling only feedback or eval sharing is insufficient.
-2. Supply a **project-scoped** `OPENAI_API_KEY` to Proxy and a **separate** `OPENAI_ADMIN_KEY` to Collector. The selected `dataSharing.projectId` controls the server-side `OpenAI-Project` header and the collector's allowed project check.
-3. Admin Usage is queried for **all organization projects**, grouped by model/project. A row from another project or unexpected model **pauses** the proxy. This is intentional: multiple enabled projects share the same incentive pools, and delayed or unseen bypass traffic still prevents a zero-cost guarantee.
-4. Complete the [billing validation](billing-validation.md), including actual free incentive entries and Costs. Configuration is a declaration, **not proof** of Data Sharing eligibility. Operator attestations and the verified preflight gate stay deny-by-default.
+```bash
+npm run onboard -- --project=proj_YOUR_EXISTING_ID --tier=launch
+```
+
+The `build` default is deliberately conservative (250K/2.5M); confirmed
+Launch/Grow offers allow 1M/10M. Daily limits are **organization-wide per
+model group**. Leave the `FREE_ONLY` policy, 85% safety cap and billing
+attestations fail-closed until independently confirmed.
+
+**Operational limitation:** Admin Usage is queried across all organization
+projects; currently QuotaFuse pauses if an official usage row belongs to a
+different project or an unreviewed model. "All projects" in OpenAI settings
+does **not** make QuotaFuse a cross-project router. Unmanaged bypass traffic
+may spend the same org quota. Do not create separate ledgers for one org pool.
+
+Project-scoped `OPENAI_API_KEY` belongs only in `.env.proxy`; the distinct
+organization `OPENAI_ADMIN_KEY` belongs only in `.env.collector`.
+Never paste either key into an agent conversation.
+
+Official model groups and program terms:
+https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai
 
 ## Migration
 
