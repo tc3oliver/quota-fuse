@@ -67,9 +67,8 @@ function textFormat(config: Config, v: unknown, now: Date): ObjectValue {
 }
 function validateFunctionTools(config: Config, input: unknown, now: Date): ObjectValue[] {
   if (!Array.isArray(input) || input.length === 0 || input.length > 16) fail('Expected 1-16 local functions');
-  audited(config,'localFunctions',now);
   const names = new Set<string>();
-  return input.map((tool: unknown) => {
+  const validated = input.map((tool: unknown) => {
     if (!record(tool) || tool.type !== 'function') fail('Only client-side function tools permitted');
     keys(tool,['type','name','description','parameters','strict'],'function tool');
     if (!functionName(tool.name) || names.has(tool.name)) fail('Invalid or duplicate function name');
@@ -79,6 +78,10 @@ function validateFunctionTools(config: Config, input: unknown, now: Date): Objec
     if (tool.parameters !== undefined) schema(tool.parameters, 'function parameters');
     return tool as ObjectValue;
   });
+  // Always reject hosted/remote tool kinds before checking the separately
+  // attested local-function entitlement, so unsupported features stay 403.
+  audited(config,'localFunctions',now);
+  return validated;
 }
 function validatedInput(config: Config, input: unknown, now: Date): unknown {
   if (typeof input === 'string') return boundedText(input,'input');

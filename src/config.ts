@@ -53,7 +53,7 @@ export function validateConfig(c: Config): Config {
     if (q.dailyTokens > DATA_SHARING_LIMITS[c.dataSharing.tier][group])
       throw new Error('Quota ' + group + ' exceeds ' + c.dataSharing.tier + ' Data Sharing tier entitlement');
     for (const model of q.models) {
-      if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(model) || seen.has(model) || model.endsWith('-latest')) throw new Error('Model IDs must be unique and explicit, not aliases');
+      if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(model) || seen.has(model) || (model.endsWith('-latest') && !['gpt-5-chat-latest','codex-mini-latest'].includes(model))) throw new Error('Model IDs must be unique and explicit, not aliases');
       seen.add(model);
     }
   }

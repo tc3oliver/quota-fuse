@@ -24,8 +24,10 @@
     "exclusiveOrgTrafficAttestedUntil": null,
     "manualCostsAuditedUntil": null,
     "reconcileMaxAgeSeconds": 600,
-    "localFunctionBillingVerifiedUntil": null,
-    "structuredTextBillingVerifiedUntil": null
+    "localFunctionsVerified": false,
+    "localFunctionsAttestedUntil": null,
+    "structuredTextVerified": false,
+    "structuredTextAttestedUntil": null
   },
   "quotas": {
     "premium": {

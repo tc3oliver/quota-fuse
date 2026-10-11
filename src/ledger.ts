@@ -56,7 +56,9 @@ export class Ledger {
     const canonical = JSON.stringify({ projectId: config.dataSharing.projectId, dataSharingTier: config.dataSharing.tier,
       groups: config.quotas, safetyPct: config.policy.safetyPct,
       outputCap: config.policy.maxOutputTokens, accountMargin: config.policy.accountMargin,
-      counter: config.policy.inputCounter });
+      counter: config.policy.inputCounter,
+      structuredTextVerified: config.policy.structuredTextVerified === true,
+      localFunctionsVerified: config.policy.localFunctionsVerified === true });
     return createHash('sha256').update(canonical).digest('hex');
   }
   verifyPolicy(config: Config): void {
