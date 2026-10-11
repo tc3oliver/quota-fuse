@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Add an idempotent `npm run setup` to create private config and separate proxy/collector credentials, plus local start/status scripts.
+- Rewrite README for installation and end users; move development details to `docs/development.md` and add deployment/API guides.
+
+
 - Configure selected Data Sharing project and organization tier (`build`, `launch`, `grow`) explicitly. Reject limits above verified tier entitlements, retain project/tier in policy fingerprint, and document migration from `upstream.projectId`.
 
 - Review hardening: reject unexplained official token overages, preserve a sticky pause on usage-bound violations, recheck attestation after preflight, and require completed response status before settlement.

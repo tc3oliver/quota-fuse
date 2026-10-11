@@ -7,6 +7,10 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start:local": "node --env-file=.env.proxy --disable-warning=ExperimentalWarning --experimental-strip-types src/main.ts",
+    "collector:local": "node --env-file=.env.collector --disable-warning=ExperimentalWarning --experimental-strip-types src/collector-cli.ts",
+    "status:local": "node --env-file=.env.proxy scripts/status.mjs",
     "start": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/main.ts",
     "collector": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/collector-cli.ts",
     "quota": "node --disable-warning=ExperimentalWarning --experimental-strip-types src/quota-cli.ts",
