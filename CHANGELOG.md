@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Configure selected Data Sharing project and organization tier (`build`, `launch`, `grow`) explicitly. Reject limits above verified tier entitlements, retain project/tier in policy fingerprint, and document migration from `upstream.projectId`.
+
 - Review hardening: reject unexplained official token overages, preserve a sticky pause on usage-bound violations, recheck attestation after preflight, and require completed response status before settlement.
 
 - Keep the first daily Admin Usage observation as a guarded baseline and count post-baseline local usage without double counting; unknown legacy anchors remain paused.

@@ -31,7 +31,7 @@ async function post(base:string,body:unknown=payload, h:Record<string,string>=he
 test('JSON requests settle and forward only server credentials',async()=>{
   const seen:string[]=[], f=async (url:any,init?:any) => {
     seen.push(String(url));assert.equal(init?.headers?.Authorization,'Bearer fake-upstream-test-only');
-    assert.equal(init?.headers?.['OpenAI-Project'],'proj-test');
+    assert.equal(init?.headers?.['OpenAI-Project'],'proj_test');
     assert.equal(init?.headers?.['OpenAI-Organization'],undefined);
     return fake() (url, init);
   };

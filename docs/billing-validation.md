@@ -4,7 +4,7 @@ QuotaFuse does **not** know the official remaining Data Sharing balance and cann
 
 ## Credentials and source of truth
 
-- Proxy: `OPENAI_API_KEY` (dedicated Data Sharing-enabled project, generation and exact input preflight).
+- Proxy: `OPENAI_API_KEY` (dedicated `dataSharing.projectId`, generation and exact input preflight; server-controlled `OpenAI-Project` header).
 - Collector: `OPENAI_ADMIN_KEY` (organization-wide `GET /v1/organization/usage/completions`, grouped by `model,project_id`, complete pagination). Run in a **separate process**. Never provide the Admin key to the Proxy.
 - Client: `QG_PROXY_TOKEN`, a local bearer token.
 
@@ -24,7 +24,7 @@ Legacy checkpoint rows are upgraded with a `NULL` baseline and **remain unverifi
 
 ## Before any live requests
 
-1. Confirm Data Sharing enrollment, positive balance, the eligible exact model versions, limits applicable to the account's usage tier and project-level policy. The included 1M/10M defaults are not universal.
+1. Confirm input/output Data Sharing enrollment, positive balance, exact eligible model versions, `dataSharing.projectId`, and the organization's declared `dataSharing.tier`. Build is 250K/2.5M; Launch/Grow are 1M/10M, all shared by model group across enabled projects. See [configuration guide](data-sharing-configuration.md).
 2. Inspect Dashboard *Data sharing incentive tier* including both input and output tokens, then Costs for unexpected charges.
 3. Independently test the **`POST /v1/responses/input_tokens`** call's billing classification for the exact allowed input shape using the smallest possible request. Do not enable `preflightCostVerified` until both usage and Costs have been audited.
 4. Run `npm run check` and `npm run demo`. Tests are mocked, not billing evidence.
