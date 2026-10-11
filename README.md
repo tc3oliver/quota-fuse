@@ -26,6 +26,7 @@ npm run doctor    # read-only checklist
 `.env.collector` without overwriting existing user files or SQLite history.
 `configure:local` guides the owner through missing Project and API keys in a
 **separate local terminal** with non-echoed secrets, never in an agent session.
+The Collector Admin Key should use **read-only Organization Usage permission where supported**; the Project key needs inference POST access. See [deployment permissions](docs/deployment.md#which-permissions-should-the-two-api-keys-have).
 If a service was started during setup, stop Proxy and Collector before
 changing the Project or tier; pristine paused ledgers can be configured
 without deleting their SQLite database.

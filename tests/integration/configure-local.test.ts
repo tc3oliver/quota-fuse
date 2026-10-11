@@ -64,6 +64,8 @@ test('local TTY wizard stores separate keys without ever echoing secret values',
     });
     assert.equal(status,0,output);
     assert.equal(stage,patterns.length,output);
+    assert.match(output,/Read Only or Restricted \/ Organization Usage: Read/);
+    assert.match(output,/Read Only will not work/);
     assert.doesNotMatch(output,/sk-PROJECT-NOT-ECHOED|sk-ADMIN-NOT-ECHOED/);
     assert.match(readFileSync(join(dir,'.env.proxy'),'utf8'),/OPENAI_API_KEY=sk-PROJECT-NOT-ECHOED/);
     assert.match(readFileSync(join(dir,'.env.collector'),'utf8'),/OPENAI_ADMIN_KEY=sk-ADMIN-NOT-ECHOED/);
