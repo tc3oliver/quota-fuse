@@ -53,19 +53,32 @@ test('watermark regression is rejected, remaining unchanged',()=> {
   assert.equal(l.snapshot(c,day,'premium').official_observed,1000);l.close();
 });
 test('cross-day UNKNOWN is carried as a bounded reserve, never a full stop',()=> {
-  const l=verifiedLedger(),c=cfg(),oldDay='2026-01-01';
-  l.publishSharedUsage(oldDay,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-01T11:59:00Z'));
-  l.admit(c,{key:'yesterday',hash:'x',requestId:'x',model:c.quotas.premium.models[0],group:'premium',day:oldDay,reserve:100,now:new Date('2026-01-01T12:00:00Z')});
+  const l=verifiedLedger(),c=cfg();
+  const today='2026-01-02', prevDay='2026-01-01';
+  const todayStart=Date.parse(today+'T00:00:00Z');
+  l.publishSharedUsage(prevDay,{premium:0,economy:0},{premium:0,economy:0},new Date(todayStart-90000));
+  // Window row: admitted 60s before midnight, dispatched, then UNKNOWN.
+  l.admit(c,{key:'yesterday',hash:'x',requestId:'x',model:c.quotas.premium.models[0],group:'premium',day:prevDay,reserve:100,now:new Date(todayStart-60000)});
+  l.prepareDispatch(c,'yesterday',80,4,new Date(todayStart-30000));
   l.unknown('yesterday');
-  // A fresh new-day baseline restores admission; the 100-token upper bound
+  // A fresh new-day baseline restores admission; the carried upper bound
   // rides along automatically. History and idempotency are retained.
-  const today='2026-01-02';
   l.publishSharedUsage(today,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-02T00:01:00Z'));
-  assert.equal(l.snapshot(c,today,'premium').cross_day_carry,100);
-  assert.equal(l.snapshot(c,today,'premium').effective_used,100+10000);
+  const carry=l.snapshot(c,today,'premium').cross_day_carry;
+  assert.ok(carry>0);
+  assert.equal(l.snapshot(c,today,'premium').effective_used,carry+10000);
   reserve(l,c,50,'new');
   assert.equal(l.find('yesterday')?.state,'UNKNOWN');
-  l.close();
+  // Expired row: admitted long before the window stops deducting.
+  const l2=verifiedLedger();
+  l2.publishSharedUsage(prevDay,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-01T10:00:00Z'));
+  l2.admit(c,{key:'expired',hash:'x',requestId:'x',model:c.quotas.premium.models[0],group:'premium',day:prevDay,reserve:100,now:new Date('2026-01-01T10:00:30Z')});
+  l2.prepareDispatch(c,'expired',80,4,new Date('2026-01-01T10:01:00Z'));
+  l2.unknown('expired');
+  l2.publishSharedUsage(today,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-02T00:01:00Z'));
+  assert.equal(l2.snapshot(c,today,'premium').cross_day_carry,0);
+  assert.doesNotThrow(()=>reserve(l2,c,50,'new2'));
+  l.close(); l2.close();
 });
 test('reject model aliases, duplicate allowlists, nonlocal bind and dangerous configs',()=> {
   const c=cfg();c.quotas.premium.models=['gpt-latest'];assert.throws(()=>validateConfig(c));
@@ -101,14 +114,25 @@ test('collector pause inside atomic admit denies without a reservation',()=> {
   l.close();
 });
 test('previous-day PENDING rides along as carry, blocking nothing',()=> {
-  const l=verifiedLedger(),c=cfg(),oldDay='2026-01-01';
-  l.publishSharedUsage(oldDay,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-01T10:00:00Z'));
-  l.admit(c,{key:'unsettled-old',hash:'x',requestId:'old',model:c.quotas.premium.models[0],group:'premium',day:oldDay,reserve:100,now:new Date('2026-01-01T10:00:30Z')});
-  const today='2026-01-02';
+  const l=verifiedLedger(),c=cfg();
+  const today='2026-01-02', prevDay='2026-01-01';
+  const todayStart=Date.parse(today+'T00:00:00Z');
+  l.publishSharedUsage(prevDay,{premium:0,economy:0},{premium:0,economy:0},new Date(todayStart-90000));
+  // Dispatched-but-unsettled PENDING inside the execution window is carried.
+  l.admit(c,{key:'unsettled-old',hash:'x',requestId:'old',model:c.quotas.premium.models[0],group:'premium',day:prevDay,reserve:100,now:new Date(todayStart-60000)});
+  l.prepareDispatch(c,'unsettled-old',80,4,new Date(todayStart-30000));
   l.publishSharedUsage(today,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-02T00:01:00Z'));
-  assert.equal(l.snapshot(c,today,'premium').cross_day_carry,100);
+  const carry=l.snapshot(c,today,'premium').cross_day_carry;
+  assert.ok(carry>0);
   reserve(l,c,100,'new-day');
-  l.close();
+  // Expired PENDING stops deducting.
+  const l2=verifiedLedger();
+  l2.publishSharedUsage(prevDay,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-01T10:00:00Z'));
+  l2.admit(c,{key:'expired-old',hash:'x',requestId:'old',model:c.quotas.premium.models[0],group:'premium',day:prevDay,reserve:100,now:new Date('2026-01-01T10:00:30Z')});
+  l2.prepareDispatch(c,'expired-old',80,4,new Date('2026-01-01T10:01:00Z'));
+  l2.publishSharedUsage(today,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-02T00:01:00Z'));
+  assert.equal(l2.snapshot(c,today,'premium').cross_day_carry,0);
+  l.close(); l2.close();
 });
 
 test('official baseline plus local settled is not hidden by later stale official observation',()=> {
@@ -118,12 +142,17 @@ test('official baseline plus local settled is not hidden by later stale official
   l.prepareDispatch(c,'post-baseline',98240,1744);
   l.complete('post-baseline',100000);
   assert.equal(l.snapshot(c,day,'premium').baseline_observed,700000);
-  // effective = 0 external + max(700000, 700000+100000) + 10000 reserve = 810000
+  // effective = 700000 official + 100000 settled + 10000 reserve = 810000.
+  assert.equal(l.snapshot(c,day,'premium').effective_used,810000);
   assert.equal(l.snapshot(c,day,'premium').estimated_remaining,40000);
   assert.throws(()=>reserve(l,c,40001,'would-charge'),(e:any)=>e.code==='FREE_QUOTA_EXHAUSTED');
-  // Later official aggregate contains those tokens; must not double count.
+  // Later official aggregate contains those tokens; conservative full add
+  // cannot prove reflection under mixed traffic, so it is added on top:
+  // effective = 800000 + 100000 + 10000 = 910000 -> EXHAUSTED, remaining 0.
   l.publishSharedUsage(day,{premium:800000,economy:0},{premium:0,economy:0});
-  assert.equal(l.snapshot(c,day,'premium').estimated_remaining,40000);
+  assert.equal(l.snapshot(c,day,'premium').effective_used,910000);
+  assert.equal(l.snapshot(c,day,'premium').estimated_remaining,0);
+  assert.equal(l.snapshot(c,day,'premium').state,'EXHAUSTED');
   l.close();
 });
 

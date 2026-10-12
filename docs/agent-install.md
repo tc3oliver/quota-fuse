@@ -201,7 +201,7 @@ production services may share the org pool without
 passing QuotaFuse — record their load in `policy.externalSafetyReserve`,
 never throttle them, and never treat their usage as a collector fault.
 The routing project itself may also be shared; shared proxy-scope usage
-is absorbed conservatively. Read [the recovery runbook](runbook.md#cross-day-unknown-automatic-carry)
+is absorbed conservatively. Read [the recovery runbook](runbook.md#cross-day-lifecycle-carry-windowed-deductions-expire-on-proof)
 for strict terminal-response evidence requirements, a full UTC-day billing
 cooldown, and an audited dispatched-day UNKNOWN review. Do not automatically
 execute reconciliation or alter any real ledger without explicit approval.

@@ -118,13 +118,18 @@ promise, and never a zero-fee guarantee under unbounded external traffic.
 
 QuotaFuse is an independent Apache-2.0 project, not affiliated with OpenAI.
 
-### Accounting and UNKNOWN rollover
+### Accounting and lifecycle carry
 
 New installs have `dataSharing.modelGroupAccounting: "official_v1"`; both
-`models: []` lists still mean *no whitelist*. Older config files stay on
+`models: []` lists still mean *no whitelist* — and the whitelist, when
+populated, gates **Proxy admission only** (`policy.classify` unchanged). The
+Collector classifies every project's usage through the reviewed official group
+map, never stops on an out-of-whitelist model, and records unmapped models in
+`external_unknown_models` diagnostics.
+Older config files stay on
 Premium-only accounting to preserve SQLite fingerprints and old official
 baselines. Do **not** flip accounting modes directly on a live ledger.
-See [UTC-day UNKNOWN review](docs/runbook.md#reviewed-dispatched-unknown-at-utc-rollover).
+See [UTC-day lifecycle carry](docs/runbook.md#cross-day-lifecycle-carry-windowed-deductions-expire-on-proof).
 
 
 Existing production Ledgers can switch to the published group mapping with
@@ -137,29 +142,46 @@ The org pool is shared with production services that bypass the proxy.
 Per UTC day and group, QuotaFuse tracks official proxy-scope usage,
 official external-scope usage, and local committed reservations, and admits only when:
 
-`effective_used = official_proxy + official_external_known + unknown_external + outstanding + max(0, anchor + settled − official_proxy) + cross_day_carry + reserve`
+`effective_used = official_proxy + official_external_known + unknown_external + outstanding + settled + cross_day_carry + reserve`
 
 `remaining = max(0, floor(daily_limit × safety_pct) − effective_used)`
+
+Same-day `settled` (actual) and `outstanding` (reserved) are added **in full**
+on top of the official reading. An official increment is **never** treated as
+proof that local completions were reflected: under mixed-project traffic the
+same official tokens could be foreign (counterexample: settled 100 unreflected
++ same-project external 100 + official 100 → count 200 + reserve, never net
+down). Utilization cost, accepted deliberately: already-reflected settled
+tokens are deducted twice (safe direction — capacity can only shrink, never
+inflate). The `proxy_unreflected_tokens` snapshot field is removed.
 
 External unknown models (outside the reviewed official group map) form a
 single group-independent daily total counted into **both** groups'
 `effective_used`, keeping each group's upper bound safe; confirmed groups
 are never double-subtracted, diagnostics are retained, and any safe-int
-overflow fails closed as `INVALID_USAGE`. `cross_day_carry` is the full
-reserved total of prior-day unresolved reservations
-(PENDING/UNKNOWN/MANUAL_REVIEW) automatically counted into the new day's
-same-group `effective_used` — history, idempotency and UNKNOWN rows are
+overflow fails closed as `INVALID_USAGE`. `cross_day_carry` counts only
+**DISPATCHED-phase** prior-day unresolved reservations
+(PENDING/UNKNOWN/MANUAL_REVIEW, reviewed-day exemption aside) whose enforced
+execution window (`EXECUTION_WINDOW_MS` = 30000 preflight abort + 120000
+upstream abort + 5000 clock skew = 155000ms, enforced in `server.ts`) still
+reaches the new day's midnight — i.e. `admitted_at ≥ day-00:00Z − 155000ms`.
+PREFLIGHT-phase rows never left the proxy, provably consumed zero, and are
+never carried. A timeout alone releases nothing: every day the window overlaps
+keeps the full reserve deducted. History, idempotency and UNKNOWN rows are
 preserved, never re-sent or forged COMPLETED. An optional
 `reviewDispatchedDay` review can conservatively narrow a *proven*
 DISPATCHED UNKNOWN bounded to its original day; day-to-day recovery never
-needs it or its 24h cooldown. Configure `policy.externalSafetyReserve` per group as the conservative
+needs it or its 24h cooldown. Residual risk is stated, not hand-waved:
+provider-side continuation after a client abort is possible; the
+`store:false` abort-as-cancel reading is an assumption premise. Configure `policy.externalSafetyReserve` per group as the conservative
 upper bound for external consumption during official visibility delay plus
 the 120s poll interval. QuotaFuse only gates its own admissions; it never
 limits, stops, or modifies external services. The routing project **may be
-shared with other services**: no project dedication is required or gated —
-official proxy-scope usage beyond the local upper bound is absorbed via the
-`max(0, anchor + settled − official_proxy)` term (uncertain tokens are
-deducted twice rather than ever increasing admissible capacity).
+shared with other services**: no project dedication is required or gated.
+Collection and admission are separate duties: the model whitelist
+(`policy.classify`) gates **Proxy admission only**; the Collector classifies
+every project's usage through the reviewed official group map, never stops on
+an out-of-whitelist model, and records unmapped models in diagnostics.
 `proxyProjectDedicatedAttestedUntil` and related attestations remain in old
 configs for compatibility only and are no longer admission gates.
 The collector polls every 120s.

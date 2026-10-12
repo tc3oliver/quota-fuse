@@ -45,7 +45,7 @@ See [billing-validation.md](billing-validation.md) before enabling any actual Op
 4. Stop and investigate if the official watermark regresses, per-project attribution breaks (unattributable rows, unknown models), official totals exceed any plausible bound, unexpected actual tokens breach their reservation, or Data Sharing enrollment changes. Ordinary external-service growth is **not** a fault — it only tightens admission. Accounting invariant failures remain paused even after a successful collector poll; do not manually change guard_control without an audited recovery procedure. Config attestation expiration blocks usage.
 5. To resume, document the independent evidence, use the documented offline `npm run reconcile` operation only for audited preflight-only UNKNOWN results; all other unknown outcomes require separate reviewed procedures, and re-run the collector. Production unpause is **not** represented as automatic recovery in this release.
 
-Changes to project, Data Sharing tier, model allowlists, safety caps, external reserves, or token counter modes also fail closed via the persisted policy fingerprint (the `reserve`-only addition auto-upgrades; see below). A persistent previous-day PENDING/UNKNOWN no longer blocks new-day requests — it carries automatically into the new day's `effective_used`. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
+Changes to project, Data Sharing tier, model allowlists, safety caps, external reserves, or token counter modes also fail closed via the persisted policy fingerprint (the `reserve`-only addition auto-upgrades; see below). A prior-day DISPATCHED PENDING/UNKNOWN whose execution window still overlaps the new day no longer blocks new-day requests — it carries automatically into the new day's `effective_used`; PREFLIGHT-phase rows and window-expired rows carry nothing. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
 
 ## Cutover to organization-shared accounting
 
@@ -54,7 +54,8 @@ current config **only by the `reserve` addition**: it writes an
 auto-upgrade audit row and keeps every reservation (including
 PENDING/UNKNOWN), every observation, every idempotency key and the pause
 state untouched. The upgrade is idempotent and verifiable via the audit
-row. A manual `npm run accounting:shared-migration` script remains
+row. This auto-migration is unchanged by the lifecycle-carry and additive
+formula update (`verifyPolicy` itself was not modified). A manual `npm run accounting:shared-migration` script remains
 available as an option but is no longer the required path.
 
 Swapping in a fresh database file remains a last resort, not the default: a new
@@ -82,14 +83,26 @@ for diagnosing old paused ledgers:
 3. Check `/responses/input_tokens` preflight attribution as a separate hypothesis: its official billing classification is **unverified** (it cannot be confirmed without a real paid-API check), so a small per-request-shaped overage may be preflight attribution rather than foreign traffic. Do not assume either cause is safe; review Dashboard Usage/Costs for both before proceeding. The tripwire itself keeps **no tolerance** either way.
 4. Re-attest `proxyProjectDedicatedAttestedUntil` with a dated evidence ticket, back up, and restart the Collector for a fresh baseline. (Compatibility only; not a gate in the current release. The sticky pause clears only via reviewed recovery on old code, or automatically after upgrading.)
 
-## Cross-day UNKNOWN: automatic carry
+## Cross-day lifecycle carry (windowed; deductions expire on proof)
 
-Prior-day unresolved reservations (PENDING/UNKNOWN/MANUAL_REVIEW) no
-longer block the new day: `admit` / `prepareDispatch` / gate stay open
-and each reservation's full `reserved` amount is automatically counted
-into the new day's same-group `effective_used` (`cross_day_carry`).
-History, idempotency keys and UNKNOWN rows are preserved — never
-re-sent, forged COMPLETED, or deleted.
+`cross_day_carry` counts only **DISPATCHED-phase** prior-day unresolved
+reservations (PENDING/UNKNOWN/MANUAL_REVIEW, reviewed-day exemption aside)
+whose enforced execution window still reaches the new day's midnight:
+`admitted_at ≥ day-00:00Z − 155000ms`, where 155000ms =
+`EXECUTION_WINDOW_MS` = 30000 (`PREFLIGHT_TIMEOUT_MS`) + 120000
+(`UPSTREAM_TIMEOUT_MS`) + 5000 (clock skew), enforced by real aborts in
+`server.ts` — a locally enforceable bound, not an assumed official-delay
+bound and not an arbitrary TTL. PREFLIGHT-phase rows never left the proxy,
+provably consumed zero, and are never carried. A timeout alone releases
+nothing: every day the window overlaps keeps the full `reserved` deducted;
+only the daily deduction expires (on window proof), while history,
+idempotency keys and UNKNOWN rows are preserved forever — never re-sent,
+forged COMPLETED, or deleted. `admit` / `prepareDispatch` / gate stay open;
+the carry only tightens admission, never locks the proxy. Residual risk is
+documented, not assumed away: provider-side continuation after a client
+abort remains possible (the `store:false` abort-as-cancel reading is a
+stated assumption); per-row exposure stays bounded by its admission-time
+reserve.
 
 ## Reviewed DISPATCHED UNKNOWN at UTC rollover (optional narrowing)
 

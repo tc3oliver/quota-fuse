@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
-import { utcDay, type Config } from './config.ts';
+import { utcDay, PREFLIGHT_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS, type Config } from './config.ts';
 import { Ledger, LedgerError } from './ledger.ts';
 import { Denial, gate, readinessIssues, validateRequest } from './policy.ts';
 import { chatResponse, chatStreamDelta, chatStreamEnd } from './chat.ts';
@@ -160,7 +160,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           // This preflight network operation is ONLY allowed after explicit operator audit
           // of its own incentive/billing status. Admission has already been reserved.
           const counter = await fetchImpl(config.upstream.baseUrl + '/responses/input_tokens', {
-            method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(30000), disconnect.signal]),
+            method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS), disconnect.signal]),
             body: JSON.stringify(counterRequest)
           });
           if (!counter.ok) throw new Error('Preflight counter unavailable');
@@ -180,7 +180,7 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
           ledger.prepareDispatch(config, key, inputTokens, maxOutput, nowFn());
           // Reusing only the server-provided approved values, never client auth headers.
           const upstream = await fetchImpl(config.upstream.baseUrl + '/responses', {
-            method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(120000), disconnect.signal]),
+            method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(UPSTREAM_TIMEOUT_MS), disconnect.signal]),
             body: JSON.stringify(approved)
           });
           if (!upstream.ok) throw new Error('OpenAI upstream did not return success');

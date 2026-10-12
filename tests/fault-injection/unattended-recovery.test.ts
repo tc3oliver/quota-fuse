@@ -19,18 +19,21 @@ const yesterdayNoon = new Date(yesterday + 'T12:00:00Z');
 const ZERO = { premium: 0, economy: 0 } as const;
 const zeros = (): { premium: number; economy: number } => ({ premium: 0, economy: 0 });
 
-// 1. Yesterday UNKNOWN 280 (premium, DISPATCHED): today's fresh baseline
-// unblocks admission with no review; carry is counted conservatively.
+// 1. Yesterday DISPATCHED UNKNOWN inside the execution window is carried
+// (but never blocks); older UNKNOWN stops deducting automatically.
 test('yesterday dispatched UNKNOWN carries into today without blocking admission', () => {
   const c = cfg(), l = new Ledger(':memory:');
   const oldToken = process.env.QG_PROXY_TOKEN, oldKey = process.env.OPENAI_API_KEY;
   process.env.QG_PROXY_TOKEN = 'unattended-recovery-token-1234567890';
   process.env.OPENAI_API_KEY = 'sk-test-only';
   try {
-    l.publishSharedUsage(yesterday, zeros(), zeros(), yesterdayNoon);
-    l.admit(c, { key: 'y-unknown', hash: 'h', requestId: 'r', model: c.quotas.premium.models[0], group: 'premium', day: yesterday, reserve: 280, now: yesterdayNoon });
+    const todayStart = Date.parse(day + 'T00:00:00Z');
+    const admitAt = new Date(todayStart - 60000);
+    const dispatchAt = new Date(todayStart - 30000);
+    l.publishSharedUsage(yesterday, zeros(), zeros(), new Date(todayStart - 90000));
+    l.admit(c, { key: 'y-unknown', hash: 'h', requestId: 'r', model: c.quotas.premium.models[0], group: 'premium', day: yesterday, reserve: 280, now: admitAt });
     // 200 + 64 + 16 (accountMargin) = 280 -> DISPATCHED with reserved 280.
-    l.prepareDispatch(c, 'y-unknown', 200, 64, yesterdayNoon);
+    l.prepareDispatch(c, 'y-unknown', 200, 64, dispatchAt);
     assert.equal(l.find('y-unknown')?.phase, 'DISPATCHED');
     l.unknown('y-unknown');
     assert.equal(l.find('y-unknown')?.state, 'UNKNOWN');
@@ -38,10 +41,22 @@ test('yesterday dispatched UNKNOWN carries into today without blocking admission
     l.publishSharedUsage(day, zeros(), zeros());
     const snap: any = l.snapshot(c, day, 'premium');
     assert.equal(snap.cross_day_carry, 280);
-    // 0 proxy + 0 external + 0 unknown + 0 outstanding + max(0,0+0-0) + 280 + 10000.
+    // 0 proxy + 0 external + 0 unknown + 0 outstanding + 0 settled + 280 + 10000.
     assert.equal(snap.effective_used, 280 + 10000);
     assert.doesNotThrow(() => l.admit(c, { key: 'today-ok', hash: 'h2', requestId: 'r2', model: c.quotas.premium.models[0], group: 'premium', day, reserve: 100 }));
     assert.doesNotThrow(() => gate(c, l));
+    // Older UNKNOWN outside the window stops deducting but keeps history.
+    const l2 = new Ledger(':memory:');
+    try {
+      l2.publishSharedUsage(yesterday, zeros(), zeros(), yesterdayNoon);
+      l2.admit(c, { key: 'y-old', hash: 'h', requestId: 'r', model: c.quotas.premium.models[0], group: 'premium', day: yesterday, reserve: 280, now: yesterdayNoon });
+      l2.prepareDispatch(c, 'y-old', 200, 64, yesterdayNoon);
+      l2.unknown('y-old');
+      l2.publishSharedUsage(day, zeros(), zeros());
+      assert.equal((l2.snapshot(c, day, 'premium') as any).cross_day_carry, 0);
+      assert.equal((l2.snapshot(c, day, 'premium') as any).effective_used, 10000);
+      assert.equal(l2.find('y-old')?.state, 'UNKNOWN');
+    } finally { l2.close(); }
   } finally {
     l.close();
     if (oldToken === undefined) delete process.env.QG_PROXY_TOKEN; else process.env.QG_PROXY_TOKEN = oldToken;
@@ -49,12 +64,14 @@ test('yesterday dispatched UNKNOWN carries into today without blocking admission
   }
 });
 
-// 2. Yesterday admitted PENDING (reserve 500, unsettled) is not underestimated today.
+// 2. Yesterday dispatched PENDING inside the window is carried today.
 test('cross-day pending reservation stays counted in today effective usage', () => {
   const c = cfg(), l = new Ledger(':memory:');
   try {
-    l.publishSharedUsage(yesterday, zeros(), zeros(), yesterdayNoon);
-    l.admit(c, { key: 'y-pending', hash: 'h', requestId: 'r', model: c.quotas.premium.models[0], group: 'premium', day: yesterday, reserve: 500, now: yesterdayNoon });
+    const todayStart = Date.parse(day + 'T00:00:00Z');
+    l.publishSharedUsage(yesterday, zeros(), zeros(), new Date(todayStart - 90000));
+    l.admit(c, { key: 'y-pending', hash: 'h', requestId: 'r', model: c.quotas.premium.models[0], group: 'premium', day: yesterday, reserve: 500, now: new Date(todayStart - 60000) });
+    l.prepareDispatch(c, 'y-pending', 400, 84, new Date(todayStart - 30000));
     l.publishSharedUsage(day, zeros(), zeros());
     const snap: any = l.snapshot(c, day, 'premium');
     assert.equal(snap.cross_day_carry, 500);
@@ -140,8 +157,8 @@ test('proxy official above local ledger is counted without pause', () => {
     assert.equal(l.isPaused(), false);
     const snap: any = l.snapshot(c, day, 'premium');
     assert.equal(snap.official_proxy_usage, 5000);
-    // 5000 + 0 + 0 + 0 + max(0, 0+20-5000)=0 + 0 + 10000.
-    assert.equal(snap.effective_used, 5000 + 10000);
+    // 5000 official + 20 settled + 0 outstanding + 0 carry + 10000 reserve.
+    assert.equal(snap.effective_used, 5000 + 20 + 10000);
     assert.ok((snap.effective_used as number) >= 5000);
   } finally { l.close(); }
 });
