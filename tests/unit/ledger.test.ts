@@ -52,12 +52,20 @@ test('watermark regression is rejected, remaining unchanged',()=> {
   assert.throws(()=>l.publishSharedUsage(day,{premium:999,economy:0},{premium:0,economy:0}),(e:any)=>e.code==='OFFICIAL_WATERMARK_REGRESSION');
   assert.equal(l.snapshot(c,day,'premium').official_observed,1000);l.close();
 });
-test('cross-day UNKNOWN causes next day fail-closed',()=> {
+test('cross-day UNKNOWN is carried as a bounded reserve, never a full stop',()=> {
   const l=verifiedLedger(),c=cfg(),oldDay='2026-01-01';
   l.publishSharedUsage(oldDay,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-01T11:59:00Z'));
   l.admit(c,{key:'yesterday',hash:'x',requestId:'x',model:c.quotas.premium.models[0],group:'premium',day:oldDay,reserve:100,now:new Date('2026-01-01T12:00:00Z')});
   l.unknown('yesterday');
-  assert.throws(()=>reserve(l,c,50,'new'),(e:any)=>e.code==='FREE_QUOTA_UNVERIFIED');l.close();
+  // A fresh new-day baseline restores admission; the 100-token upper bound
+  // rides along automatically. History and idempotency are retained.
+  const today='2026-01-02';
+  l.publishSharedUsage(today,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-02T00:01:00Z'));
+  assert.equal(l.snapshot(c,today,'premium').cross_day_carry,100);
+  assert.equal(l.snapshot(c,today,'premium').effective_used,100+10000);
+  reserve(l,c,50,'new');
+  assert.equal(l.find('yesterday')?.state,'UNKNOWN');
+  l.close();
 });
 test('reject model aliases, duplicate allowlists, nonlocal bind and dangerous configs',()=> {
   const c=cfg();c.quotas.premium.models=['gpt-latest'];assert.throws(()=>validateConfig(c));
@@ -92,11 +100,14 @@ test('collector pause inside atomic admit denies without a reservation',()=> {
   assert.equal(l.find('paused'),undefined);
   l.close();
 });
-test('previous-day PENDING blocks new-day admission, not just UNKNOWN',()=> {
+test('previous-day PENDING rides along as carry, blocking nothing',()=> {
   const l=verifiedLedger(),c=cfg(),oldDay='2026-01-01';
   l.publishSharedUsage(oldDay,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-01T10:00:00Z'));
   l.admit(c,{key:'unsettled-old',hash:'x',requestId:'old',model:c.quotas.premium.models[0],group:'premium',day:oldDay,reserve:100,now:new Date('2026-01-01T10:00:30Z')});
-  assert.throws(()=>reserve(l,c,100,'new-day'),(e:any)=>e.code==='FREE_QUOTA_UNVERIFIED');
+  const today='2026-01-02';
+  l.publishSharedUsage(today,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-02T00:01:00Z'));
+  assert.equal(l.snapshot(c,today,'premium').cross_day_carry,100);
+  reserve(l,c,100,'new-day');
   l.close();
 });
 

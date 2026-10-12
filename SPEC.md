@@ -136,9 +136,9 @@ modelPolicy:
 每個 UTC 日、每個群組分別維護：`official_proxy`（路由專案官方累計）、`official_external_known`（其他專案官方累計，已確認群組）、`unknown_external`（當日外部未知模型 Token 總和，唯一群組、雙邊同計）、`verified_proxy_baseline`（准入前已驗證的路由專案用量）、`proxy_local_committed`（已完成實際用量＋未結算預留上界）、`external_safety_reserve`（外部延遲消耗保守上界）、`admission_cap`、`last_successful_poll`。
 
 - `admission_cap = floor(dailyTokens * safetyPct / 100)`（預設 premium 850K、economy 8.5M）。
-- `effective_used = official_external_known + unknown_external + max(official_proxy, verified_proxy_baseline + proxy_local_committed) + external_safety_reserve`；`remaining = max(0, admission_cap − effective_used)`；僅當 `new_request_reservation ≤ remaining` 且觀測新鮮可信才准入。其中 `unknown_external` 同時計入 Premium 與 Economy 的保守估計（雙邊各自上界安全）；已確認群組不重複扣除；診斷保留；所有加總皆有 safe-int 溢位檢查，溢位即 `INVALID_USAGE` fail-closed。
+- `effective_used = official_proxy + official_external_known + unknown_external + outstanding + max(0, anchor + settled − official_proxy) + cross_day_carry + reserve`; `remaining = max(0, admission_cap − effective_used)`；僅當 `new_request_reservation ≤ remaining` 且觀測新鮮可信才准入。其中 `unknown_external` 同時計入 Premium 與 Economy 的保守估計（雙邊各自上界安全）；已確認群組不重複扣除；`outstanding` 為當日未結算預留、`anchor + settled` 為本地已錨定用量、`cross_day_carry` 為跨日未決預留結轉、`reserve` 為外部安全保留；診斷保留；所有加總皆有 safe-int 溢位檢查，溢位即 `INVALID_USAGE` fail-closed。不依賴專案專用性：不確定 Token 寧可重複扣除，不增加可用額度。
 - 組織額度由所有符合條件的服務共享；外部服務可合法繞過 Proxy，其消耗只會收緊准入，絕不觸發 collector 停止。外部 scope 分類只用官方群組映射，不看 Proxy 白名單；映射外的未知模型同時計入雙群組並留診斷紀錄。
-- 路由專案本身必須專屬於 QuotaFuse（`proxyProjectDedicatedAttestedUntil` 到期見證＋運行時 tripwire）：`max()` 去重只有在此前提下成立，無證據不得放行；專案內出現本地上界解釋不了的官方用量即 sticky 鎖定待人工審查。tripwire 維持緊繃、不加任何容差；`/responses/input_tokens` preflight 的官方歸帳行為無法證實（不能用真實付費 API 驗證），因此保留 fail-closed：preflight 若被計入用量也可能觸發 tripwire，診斷必須同時指向「專案共用」與「preflight 歸帳」兩種可能，不宣稱已驗證安全。
+- 路由專案可與其他服務共用，無需專用見證：官方 proxy-scope 用量超出本地上界時以 `max(0, anchor + settled − official_proxy)` 保守吸收，不低估放行；不設專用 gate，不設 tripwire。`proxyProjectDedicatedAttestedUntil` / `manualCostsAuditedUntil` / `exclusiveOrgTrafficAttestedUntil` 僅為相容保留，不再是 gate，不需定期重簽。
 - 即使官方 Usage API 落後，本地預留與未確定結果也不可釋放；官方觀測總量不得回退；失敗的輪詢不得視為零用量。
 - `admit` 必須在 SQLite `BEGIN IMMEDIATE` 單交易中完成餘額檢查 + 預留寫入；所有執行中的 Agent 共享同一個 SQLite DB。
 - 估算 `reserve = trusted_input_count + effective_max_output_tokens + account_margin`；`max_output_tokens`（Responses）或 `max_completion_tokens`（Chat）須由 Proxy 強制上限；禁止省略及無界輸出。
@@ -149,7 +149,7 @@ modelPolicy:
 - 上游成功並收到完整 usage 時：以實際 `input_tokens + output_tokens` 結算，釋放未使用的預留。
 - Timeout、客戶端中斷、串流無最終 usage、無法確認上游是否收到請求時：狀態改 `UNKNOWN`，預留**不得立即釋放**；待可靠對帳或人工確認處理。
 - `X-Request-ID` / idempotency key 在 Proxy 層去重；不可因客戶端重試造成雙次上游呼叫。已送出的不確定請求不允許透明重試。
-- 重置：按 UTC 00:00 分桶；跨日未結算請求保留原日責任，啟動新日配額前執行對帳/隔離，必要時短暫拒絕。禁止不經檢查在午夜清空 unknown reservations。
+- 重置：按 UTC 00:00 分桶；跨日未結算請求（PENDING/UNKNOWN/MANUAL_REVIEW）保留原日責任，其 `reserved` 全額自動計入新日同群組 `effective_used`（cross-day carry），admit/prepareDispatch/gate 不再跨日阻擋。歷史紀錄與 idempotency 永遠保留，不重送、不偽造 COMPLETED、不刪除。可選的 `reviewDispatchedDay` 流程可將經證實終結於原日的 DISPATCHED UNKNOWN 保守縮減（需 24h cooldown）；日常恢復不需要它。
 
 ### 准入示意（非可直接執行程式碼）
 
@@ -214,7 +214,7 @@ ANY -> (operator hold) MANUAL_HOLD -> (audited review only) READY
 
 - 程序重啟先掃描 PENDING，任何沒有可靠完成紀錄的 reservation 一律轉 UNKNOWN、保留 token。
 - DB 損毀/磁碟滿、時鐘異常、Collector 停止、配額名單失效：health ready=false，禁止送出新請求。
-- 不支援自動清空未知消費、重試所有失敗請求、跨日轉移預留、無預估輸出上限的串流。
+- 不支援自動清空未知消費、重試所有失敗請求、無預估輸出上限的串流。跨日未決預留自動結轉新日同群組 `effective_used`（非清空）。
 
 ## 11. 設定檔（自訂 Quota Guard Schema，非 OMP 原生語法）
 
@@ -285,7 +285,7 @@ Model Allowlist 必須由部署程序顯式審核填入，不能在原始碼內�
 15. 資料分享資格撤銷、專案設定變動：停止所有免費路由。
 16. 沒有 Proxy Token、非本機來源、header spoofing、任意 upstream path：拒絕。
 17. OMP 收到本地 429/503：切到**獨立 Provider**，不在 OpenAI Data Sharing 群組內循環重試。
-18. 其他 Org 專案有旁路流量時：正確記錄為外部 scope 並收緊准入；白名單外已知模型正確分組、未知模型同時計入雙群組保守上界並留診斷；collector 不得停止或報 invariant 錯誤。路由專案內混入外部流量時：sticky 鎖定待審，不可低估放行；tripwire 不加容差，preflight 歸帳未驗證亦可觸發，診斷須並列兩種可能。
+18. 其他 Org 專案有旁路流量時：正確記錄為外部 scope 並收緊准入；白名單外已知模型正確分組、未知模型同時計入雙群組保守上界並留診斷；collector 不得停止或報 invariant 錯誤。路由專案可與其他服務共用：proxy-scope 超量以保守加項吸收，不設 tripwire、不低估放行。跨日未決預留（PENDING/UNKNOWN/MANUAL_REVIEW）自動全額結轉新日同群組 `effective_used`，不阻擋 admit，歷史與冪等保留。
 19. 透過測試帳務/人工 Dashboard 校對，確認免費標記與 Costs 沒有不預期項目；不能將 mock 成功誤當真實帳務保證。
 20. 進行故障注入測試：所有不確定狀態均有可追蹤的拒絕原因與恢復操作。
 
@@ -307,7 +307,7 @@ Model Allowlist 必須由部署程序顯式審核填入，不能在原始碼內�
 
 - Data Sharing enrollment 與實際優惠模型清單已驗證；每個群組上限正確。
 - API Token 估算在所有已允許請求形態上都有可信上界；不支援者會拒絕。
-- 無不受控且未設上界的同 Org 旁路流量（外部消耗需有 `externalSafetyReserve` 保守上界），路由專案經見證專用，或已明確停用 FREE_ONLY 生產保證。
+- 無不受控且未設上界的同 Org 旁路流量（外部消耗需有 `externalSafetyReserve` 保守上界），路由專案可與其他服務共用（保守計算吸收），或已明確停用 FREE_ONLY 生產保證。
 - 20 項測試通過；實際 Dashboard/Costs 對帳完成；未知結果會留在 ledger 而非被釋放。
 - 沒有 admin/upstream secret 洩漏；任何限制失效會 Fail Closed。
 - 文件明示 **「最小化意外扣款風險」，不承諾由 Proxy 單方面保證 OpenAI 帳戶零費用**。

@@ -35,7 +35,7 @@ try {
       ' estimated admissible tokens (' + group.state + ', UTC ' + group.utc_day + ')');
     console.log('  org ' + fmt(group.official_org_usage) + ' = proxy ' + fmt(group.official_proxy_usage) +
       ' + external ' + fmt(group.official_external_usage) + '; committed ' + fmt(group.proxy_local_committed) +
-      ' + reserve ' + fmt(group.external_safety_reserve) + ' => used ' + fmt(group.effective_used));
+      ' + carry ' + fmt(group.cross_day_carry) + ' + reserve ' + fmt(group.external_safety_reserve) + ' => used ' + fmt(group.effective_used));
     const unknown = Array.isArray(group.external_unknown_models) ? group.external_unknown_models : [];
     if (unknown.length) console.log('  external unknown models: ' + unknown.map(u => u.model + ' (' + fmt(u.tokens) + ')').join(', '));
   }
@@ -48,9 +48,6 @@ try {
       PREFLIGHT_COUNTER_DISABLED: 'Counter mode is disabled: review docs/billing-validation.md; never toggle without evidence.',
       PREFLIGHT_COST_UNVERIFIED: 'Preflight billing is not confirmed: review docs/billing-validation.md.',
       ELIGIBILITY_ATTESTATION_MISSING: 'Enrollment attestation missing or expired; use existing evidence where valid.',
-      PROXY_PROJECT_DEDICATION_UNVERIFIED: 'Routing project dedication unattested or expired: verify no other service uses this project, then re-attest with evidence.',
-      COST_AUDIT_UNVERIFIED: 'Costs audit attestation missing or expired.',
-      PRIOR_DAY_UNKNOWN: 'Previous UTC-day usage outcome unresolved; see docs/runbook.md.',
       LEDGER_UNAVAILABLE: 'SQLite ledger could not be read safely; see docs/runbook.md.'
     };
     const reasons = Array.isArray(diagnostic.reasons) ? diagnostic.reasons : [];
@@ -59,9 +56,7 @@ try {
       if (typeof reason !== 'string') continue;
       const prefix = reason.split(':')[0];
       const detail = prefix === 'COLLECTOR_PAUSED'
-        ? ((reason.split(':')[1] || 'UNVERIFIED') === 'PROXY_PROJECT_SHARED'
-          ? 'Collector is paused (PROXY_PROJECT_SHARED). Check both project sharing (foreign traffic in the routing project) and /responses/input_tokens preflight attribution (unverified); see docs/runbook.md.'
-          : 'Collector is paused (' + (reason.split(':')[1] || 'UNVERIFIED') + '). External bypass traffic never pauses collection; check Admin key, usage API, and collector logs.')
+        ? 'Collector is paused (' + (reason.split(':')[1] || 'UNVERIFIED') + '). Legacy pauses (UNACCOUNTED_OFFICIAL_USAGE, PROXY_PROJECT_SHARED, ANCHOR_UNVERIFIED) auto-clear on the next complete trusted publish; external bypass traffic never pauses collection; otherwise check Admin key, usage API, and collector logs.'
         : prefix === 'USAGE_BASELINE_UNVERIFIED'
         ? 'Fresh official usage baseline missing for ' + (reason.split(':')[1] || 'group') + '; start and check the collector.'
         : (help[reason] || 'Review docs/runbook.md for this admission issue.');

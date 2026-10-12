@@ -20,27 +20,34 @@ export class LedgerError extends Error {
 }
 const migration = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/001_initial.sql'), 'utf8');
 const safeInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
-// A healthy collector may clear ONLY these known transport/readiness pauses.
-// Invariant failures, operator holds and unrecognized reasons remain sticky.
-// Shared-org note: external-service consumption is LEGITIMATE and never an
-// invariant failure; recoverable pauses below are cleared by the next complete
-// trusted observation. Sticky holds still require audited operator review.
+// A healthy collector may clear ONLY these known transport/readiness pauses
+// plus retired legacy pauses from older deployments. Genuine invariant
+// failures (ACTUAL_EXCEEDS_RESERVED, OFFICIAL_WATERMARK_REGRESSION) and
+// operator holds remain sticky. Shared-org note: external-service consumption
+// is LEGITIMATE and never an invariant failure.
+// Unattended design: UNACCOUNTED_OFFICIAL_USAGE (pre-shared-pool),
+// PROXY_PROJECT_SHARED (retired tight tripwire) and ANCHOR_UNVERIFIED clear
+// automatically on the next complete trusted observation — validation runs
+// first, so clearing never hides a fresh failure.
 const collectorRecoverable = new Set<string | null>([
   null, 'COLLECTOR_NOT_VERIFIED', 'COLLECTOR_UNVERIFIED', 'COLLECTOR_DOWN',
   'COLLECTOR_REFRESHING', // recovery from an older interrupted deployment
   'STALE_OBSERVATION', 'DATA_UNVERIFIED',
+  'UNACCOUNTED_OFFICIAL_USAGE', 'PROXY_PROJECT_SHARED', 'ANCHOR_UNVERIFIED',
 ]);
 const collectorInvariantFailures = new Set([
   'ACTUAL_EXCEEDS_RESERVED',
+  // ANCHOR_UNVERIFIED stays in both sets: a good full observation may proceed
+  // past a stale anchor pause (validation runs first), while a fresh anchor
+  // failure keeps its specific code instead of degrading to a generic one.
   'OFFICIAL_WATERMARK_REGRESSION', 'ANCHOR_UNVERIFIED',
-  // PROXY_PROJECT_SHARED: proxy-scope official usage above the local upper
-  // bound proves foreign traffic inside the DEDICATED routing project (or a
-  // broken baseline). Unlike org-wide external traffic, this invalidates the
-  // max()-dedup premise and stays sticky pending human review.
-  'PROXY_PROJECT_SHARED'
   // NOTE: UNACCOUNTED_OFFICIAL_USAGE is intentionally REMOVED. The org pool is
   // shared with production services that bypass the proxy; official totals
   // above the local ledger are expected, not anomalous.
+  // NOTE: PROXY_PROJECT_SHARED (the retired tight tripwire) is never raised by
+  // current code. The additive snapshot formula below stays conservative when
+  // the routing project is shared, so no dedication premise is needed and no
+  // manual attestation can unlock extra capacity.
 ]);
 
 export class Ledger {
@@ -109,8 +116,29 @@ export class Ledger {
     return createHash('sha256').update(canonical).digest('hex');
   }
   verifyPolicy(config: Config): void {
-    const old = this.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as any;
-    if (!old || old.sha256 !== this.policyHash(config)) throw new LedgerError('POLICY_CHANGED', 'Uninitialized or changed policy; operator reconciliation required');
+    const next = this.policyHash(config);
+    const legacy = this.legacyPolicyHash(config);
+    // The whole decision runs inside one IMMEDIATE transaction so concurrent
+    // proxy+collector boots cannot double-migrate: the loser re-reads the
+    // winner's fingerprint and returns via the first branch (idempotent).
+    this.tx(() => {
+      const old = this.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as any;
+      if (old && old.sha256 === next) return;
+      // Painless upgrade: a stored pre-shared-accounting fingerprint that
+      // differs from the current config in exactly the reserve addition is
+      // adopted automatically, with an immutable audit row. History-preserving
+      // and verifiable via accounting_migration_audit. Any other drift fails closed.
+      if (old && old.sha256 === legacy && old.sha256 !== next) {
+        this.db.prepare('UPDATE policy_fingerprint SET sha256=? WHERE id=1').run(next);
+        this.db.prepare(`INSERT INTO accounting_migration_audit
+          (operator,evidence,effective_utc_day,from_fingerprint,to_fingerprint,created_at)
+          VALUES(?,?,?,?,?,?)`).run('auto-upgrade',
+          'Automatic in-place adoption of shared-org accounting: stored policy differs from current config only by the externalSafetyReserve addition; reservations, observations, idempotency keys and pause state preserved.',
+          utcDay(), old.sha256, next, new Date().toISOString());
+        return;
+      }
+      throw new LedgerError('POLICY_CHANGED', 'Uninitialized or changed policy; operator reconciliation required');
+    });
   }
   /** Pre-shared-accounting fingerprint (no externalSafetyReserve). Used ONLY
    * by the audited in-place migration to prove the stored policy differs
@@ -248,23 +276,13 @@ export class Ledger {
       if (present.n) throw new LedgerError('ANCHOR_UNVERIFIED', 'Cannot initialize a baseline after local requests were admitted');
     }
     if (at.getTime() > Date.now() + 5000) throw new LedgerError('CLOCK_SKEW', 'Future collector checkpoint');
-    // Proxy-project dedication tripwire (scoped, NOT org-wide): under a
-    // dedicated routing project, proxy-scope official usage can only reflect
-    // locally committed tokens (possibly delayed), so it can never exceed
-    // baseline + local upper bound. Overflow proves foreign traffic inside
-    // the proxy project (or a broken baseline) and invalidates max()-dedup.
-    // External-scope growth is exempt — it is legitimate shared-pool use.
-    if (old) {
-      const { settled, outstanding } = this.usage(day, group);
-      const localUpper = (old.anchor_tokens as number) + settled + outstanding;
-      if (!Number.isSafeInteger(localUpper))
-        throw new LedgerError('INVALID_USAGE', 'Usage overflow');
-      if (proxyTokens > localUpper)
-        throw new LedgerError('PROXY_PROJECT_SHARED', 'Proxy-scope official usage exceeds dedicated-project upper bound (possible project sharing or counted preflight input_tokens; see runbook)');
-    }
+    // No dedication tripwire: the routing project may carry other legitimate
+    // traffic. Proxy-scope official usage above the local upper bound is
+    // absorbed conservatively by the additive snapshot formula (official
+    // tokens are always counted, unreflected local reservations are added on
+    // top), so sharing can only tighten admission, never loosen it.
     // Delayed official aggregation may reflect proxy completions late; the
-    // snapshot formula handles that conservatively with max(). Only
-    // above-upper-bound proxy readings trip; external scope never does.
+    // unreflected-local term below covers exactly that window.
   }
   private saveSharedObservation(day: string, group: Group, proxyTokens: number, externalTokens: number, at: Date): void {
     const iso = at.toISOString();
@@ -358,6 +376,31 @@ export class Ledger {
       throw new LedgerError('INVALID_USAGE', 'Unverifiable unknown-model accounting');
     return r.t;
   }
+  /** Conservative carryover of older unresolved reservations into a new day.
+   * Every PENDING/UNKNOWN/MANUAL_REVIEW reservation from an earlier UTC day
+   * keeps its full reserve deducted from that group until it settles — it is
+   * never assumed terminated, never re-dispatched, never forged COMPLETED,
+   * and never deleted. The only exemption is a dispatched UNKNOWN proven by
+   * review to have finalized inside its original day (its tokens cannot bill
+   * to the new day). Review is an optional conservatism reduction, never a
+   * daily requirement: unreviewed rows simply keep reducing admission by
+   * their bounded reserve. Overflow or unreadable state fails closed. */
+  crossDayCarry(day: string, group: Group): number {
+    let r: any;
+    try {
+      r = this.db.prepare(`SELECT COALESCE(SUM(r.reserved),0) AS t FROM reservations AS r
+        LEFT JOIN dispatched_day_reviews AS d ON d.idempotency_key = r.idempotency_key
+        WHERE r.utc_day < ? AND r.group_name = ? AND r.state IN ('PENDING','UNKNOWN','MANUAL_REVIEW')
+          AND NOT (r.state='UNKNOWN' AND r.phase='DISPATCHED'
+            AND d.idempotency_key IS NOT NULL AND d.utc_day=r.utc_day
+            AND d.reserved=r.reserved)`).get(day, group) as any;
+    } catch {
+      throw new LedgerError('INVALID_USAGE', 'Unverifiable cross-day carryover');
+    }
+    if (typeof r?.t !== 'number' || !Number.isSafeInteger(r.t) || r.t < 0)
+      throw new LedgerError('INVALID_USAGE', 'Unverifiable cross-day carryover');
+    return r.t;
+  }
   /** Legacy compat: proxy-only publish. External scope is carried over when
    * known, otherwise the row stays fail-closed (external unknown). Prefer
    * publishSharedUsage for all new collector paths. */
@@ -410,40 +453,44 @@ export class Ledger {
     const obs = this.observation(day, group);
     const { settled, outstanding, unknown } = this.usage(day, group);
     const safetyCap = Math.floor(config.quotas[group].dailyTokens * config.policy.safetyPct / 100);
-    // Organization-aware shared-quota accounting.
+    // Unattended shared-quota accounting. No project-dedication premise:
     //
-    // effective_used = official_external_known + unknown_external
-    //   + max(official_proxy, verified_proxy_baseline + proxy_local_committed)
+    // effective_used = official_proxy + official_external_known
+    //   + unknown_external + proxy_unreflected + cross_day_carry
     //   + external_safety_reserve
+    // proxy_unreflected = outstanding + max(0, anchor + settled − official_proxy)
     //
-    // - official_external_known: other projects' cumulative usage with a
-    //   confirmed group. External services may legally bypass the proxy;
-    //   their consumption is expected, never an invariant failure.
-    // - unknown_external: external tokens whose group is unconfirmed. They
-    //   belong to exactly one group, so counting them in BOTH groups keeps
-    //   each per-group estimate a safe upper bound (never Economy
-    //   undercount, never double-count of confirmed models).
-    // - max(official_proxy, baseline + committed): settled proxy tokens already
-    //   reflected in the official aggregate must not be double-counted, while
-    //   locally committed but not-yet-visible proxy usage keeps its full
-    //   reservation. The proxy project scope is the dedup boundary.
-    // - external_safety_reserve: conservative operator-configured bound for
-    //   external consumption during official visibility delay + poll interval.
+    // - official_proxy / official_external_known: org-wide cumulative usage
+    //   with a confirmed group. External and foreign-project traffic is
+    //   legitimate and always counted — it can only tighten admission.
+    // - unknown_external: external tokens whose group is unconfirmed, counted
+    //   in BOTH groups (they belong to exactly one, so each bound stays safe).
+    // - proxy_unreflected: locally committed but not-yet-visible proxy usage
+    //   is added ON TOP of the official reading. In-flight reservations
+    //   (outstanding) are always added in full — they cannot have settled
+    //   yet; settled tokens already reflected officially cancel out via the
+    //   max() term instead of double-counting. Uncertain tokens may be
+    //   deducted twice (conservative); they can never inflate availability.
+    // - cross_day_carry: older unresolved reservations keep their full
+    //   reserve deducted (never assumed terminated). See crossDayCarry().
+    // - external_safety_reserve: operator bound for external consumption
+    //   during official visibility delay + poll interval.
     // - This is a conservative admission estimate, NOT an official promise of
     //   free balance. Unbounded external traffic cannot guarantee zero fees.
     const reserve = config.policy.externalSafetyReserve[group];
     const anchored = obs?.anchor_tokens !== null && obs?.anchor_tokens !== undefined;
     const externalKnown = obs?.official_external !== null && obs?.official_external !== undefined;
-    const proxyCommitted = settled + outstanding;
-    const proxyEffective = anchored
-      ? Math.max(obs!.official_high_watermark, (obs!.anchor_tokens as number) + proxyCommitted)
-      : safetyCap;
+    const proxyOfficial = anchored ? (obs!.official_high_watermark as number) : 0;
+    const anchor = anchored ? (obs!.anchor_tokens as number) : 0;
+    const unreflectedSettled = anchored ? Math.max(0, anchor + settled - proxyOfficial) : 0;
+    const proxyUnreflected = outstanding + unreflectedSettled;
     const unknownExternal = this.unknownExternalTotal(day);
+    const carry = this.crossDayCarry(day, group);
     const externalTotal = externalKnown ? (obs!.official_external as number) + unknownExternal : 0;
     const effective = anchored && externalKnown
-      ? externalTotal + proxyEffective + reserve
+      ? proxyOfficial + externalTotal + proxyUnreflected + carry + reserve
       : safetyCap;
-    if (!Number.isSafeInteger(proxyEffective) || !Number.isSafeInteger(externalTotal) || !Number.isSafeInteger(effective)) throw new LedgerError('INVALID_USAGE', 'Usage overflow');
+    if (!Number.isSafeInteger(proxyUnreflected) || !Number.isSafeInteger(externalTotal) || !Number.isSafeInteger(carry) || !Number.isSafeInteger(effective)) throw new LedgerError('INVALID_USAGE', 'Usage overflow');
     const ageMs = !!obs && anchored && externalKnown ? now.getTime() - Date.parse(obs.reconciled_at) : NaN;
     const fresh = anchored && externalKnown && !!obs && ageMs >= 0 && ageMs <= config.policy.reconcileMaxAgeSeconds * 1000;
     const observationAge = !!obs && Number.isFinite(Date.parse(obs.reconciled_at)) ? Math.max(0, Math.floor((now.getTime() - Date.parse(obs.reconciled_at)) / 1000)) : null;
@@ -463,8 +510,10 @@ export class Ledger {
       official_org_usage: officialOrg,
       official_external_usage: externalKnown ? (obs!.official_external as number) : null,
       official_proxy_usage: obs?.official_high_watermark ?? null,
-      proxy_local_committed: proxyCommitted,
+      proxy_local_committed: settled + outstanding,
       proxy_pending_reserved: outstanding,
+      proxy_unreflected_tokens: anchored && externalKnown ? proxyUnreflected : null,
+      cross_day_carry: carry,
       external_safety_reserve: reserve,
       external_unknown_tokens: unknownExternal,
       effective_used: anchored && externalKnown ? effective : null,
@@ -559,7 +608,9 @@ export class Ledger {
       if (this.isPaused()) throw new LedgerError('FREE_QUOTA_UNVERIFIED', 'Collector has paused admission');
       const existing = this.find(args.key);
       if (existing) throw new LedgerError(existing.body_hash === args.hash ? 'DUPLICATE_REQUEST' : 'IDEMPOTENCY_CONFLICT', 'Idempotency key is already used; no replay allowed');
-      if (this.hasCrossDayUnknown(args.day)) throw new LedgerError('FREE_QUOTA_UNVERIFIED', 'Prior-day reservations require review');
+      // No cross-day gate: older unresolved reservations are carried into
+      // today's estimate automatically (see crossDayCarry), so a small
+      // yesterday UNKNOWN only costs its bounded reserve, never a full stop.
       const view = this.snapshot(config, args.day, args.group, args.now ?? new Date());
       if (view.confidence !== 'CONDITIONAL') throw new LedgerError('FREE_QUOTA_UNVERIFIED', 'Collector checkpoint stale or missing');
       if (args.reserve > view.estimated_remaining) throw new LedgerError('FREE_QUOTA_EXHAUSTED', 'Not enough guarded free-token capacity');
@@ -579,7 +630,7 @@ export class Ledger {
     this.tx(() => {
       const r = this.find(key);
       if (!r || r.state !== 'PENDING' || r.phase !== 'PREFLIGHT') throw new LedgerError('INVALID_TRANSITION', 'Generation already dispatched or request no longer pending');
-      if (this.isPaused() || utcDay(now) !== r.utc_day || total > r.reserved || this.hasCrossDayUnknown(r.utc_day))
+      if (this.isPaused() || utcDay(now) !== r.utc_day || total > r.reserved)
         throw new LedgerError('FREE_QUOTA_UNVERIFIED', 'Cannot safely dispatch after preflight');
       const view = this.snapshot(config, r.utc_day, r.group_name, now);
       if (view.confidence !== 'CONDITIONAL') throw new LedgerError('FREE_QUOTA_UNVERIFIED', 'Collector checkpoint stale');

@@ -8,19 +8,19 @@ export class Denial extends Error {
 }
 export function gate(config: Config, ledger: Ledger, now = new Date()): void {
   const p = config.policy;
-  // Shared-org design: production services may legally bypass the proxy and
-  // share the org pool. exclusiveOrgTrafficAttestedUntil is therefore NOT a
-  // gate (kept in config only for backward compatibility). External usage
-  // tightens admission through effective_used instead of pausing collection.
-  // The routing project itself, however, MUST be dedicated to QuotaFuse: the
-  // max()-dedup is only sound when proxy-scope official usage can solely be
-  // locally committed traffic. Without fresh dedication evidence, admission
-  // fails closed rather than claiming safe dedup.
+  // Unattended design: one-time setup checks only (routing project chosen,
+  // free-tier eligibility confirmed once, credentials present, trusted input
+  // counter). Everything else self-heals: external/bypass traffic only
+  // tightens admission via effective_used, older unresolved reservations are
+  // carried as bounded reserves, and collector pauses clear on the next good
+  // poll. No daily attestation, no per-UNKNOWN review, no manual unpause in
+  // the normal loop. proxyProjectDedicatedAttestedUntil /
+  // manualCostsAuditedUntil / exclusiveOrgTrafficAttestedUntil are accepted
+  // for backward compatibility but are NOT gates.
   if (/^proj_(SELECT|REPLACE|YOUR|EXAMPLE)/i.test(config.dataSharing.projectId) ||
       !attestedUntil(p.eligibilityAttestedUntil, now) ||
-      !attestedUntil(p.proxyProjectDedicatedAttestedUntil ?? null, now) ||
-      !attestedUntil(p.manualCostsAuditedUntil, now) || !process.env.OPENAI_API_KEY || !process.env.QG_PROXY_TOKEN || ledger.isPaused() ||
-      !p.preflightCostVerified || p.inputCounter !== 'responses_preflight' || ledger.hasCrossDayUnknown(utcDay(now))) {
+      !process.env.OPENAI_API_KEY || !process.env.QG_PROXY_TOKEN || ledger.isPaused() ||
+      !p.preflightCostVerified || p.inputCounter !== 'responses_preflight') {
     throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', 'Production safety gates are not verified');
   }
   for (const group of ['premium', 'economy'] as const) {
@@ -40,12 +40,9 @@ export function readinessIssues(config: Config, ledger: Ledger, now = new Date()
   if (p.inputCounter !== 'responses_preflight') issues.push('PREFLIGHT_COUNTER_DISABLED');
   if (!p.preflightCostVerified) issues.push('PREFLIGHT_COST_UNVERIFIED');
   if (!attestedUntil(p.eligibilityAttestedUntil, now)) issues.push('ELIGIBILITY_ATTESTATION_MISSING');
-  if (!attestedUntil(p.proxyProjectDedicatedAttestedUntil ?? null, now)) issues.push('PROXY_PROJECT_DEDICATION_UNVERIFIED');
-  if (!attestedUntil(p.manualCostsAuditedUntil, now)) issues.push('COST_AUDIT_UNVERIFIED');
   try {
     const pause = ledger.pauseReason();
     if (pause) issues.push('COLLECTOR_PAUSED:' + (pause.match(/^[A-Z_]{1,60}$/) ? pause : 'UNKNOWN'));
-    if (ledger.hasCrossDayUnknown(utcDay(now))) issues.push('PRIOR_DAY_UNKNOWN');
     for (const group of ['premium', 'economy'] as const) {
       try {
         const obs = ledger.snapshot(config, utcDay(now), group, now);

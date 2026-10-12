@@ -45,43 +45,53 @@ See [billing-validation.md](billing-validation.md) before enabling any actual Op
 4. Stop and investigate if the official watermark regresses, per-project attribution breaks (unattributable rows, unknown models), official totals exceed any plausible bound, unexpected actual tokens breach their reservation, or Data Sharing enrollment changes. Ordinary external-service growth is **not** a fault — it only tightens admission. Accounting invariant failures remain paused even after a successful collector poll; do not manually change guard_control without an audited recovery procedure. Config attestation expiration blocks usage.
 5. To resume, document the independent evidence, use the documented offline `npm run reconcile` operation only for audited preflight-only UNKNOWN results; all other unknown outcomes require separate reviewed procedures, and re-run the collector. Production unpause is **not** represented as automatic recovery in this release.
 
-Changes to project, Data Sharing tier, model allowlists, safety caps, external reserves, or token counter modes also fail closed via the persisted policy fingerprint. A persistent previous-day PENDING/UNKNOWN causes new-day requests to fail closed. Without an audited resolution there is no safe self-service bypass. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
+Changes to project, Data Sharing tier, model allowlists, safety caps, external reserves, or token counter modes also fail closed via the persisted policy fingerprint (the `reserve`-only addition auto-upgrades; see below). A persistent previous-day PENDING/UNKNOWN no longer blocks new-day requests — it carries automatically into the new day's `effective_used`. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
 
 ## Cutover to organization-shared accounting
 
-Releases with shared-pool accounting change the policy fingerprint (new
-`externalSafetyReserve`). An existing history-bearing ledger will report
-`POLICY_CHANGED` at boot — this is fail-closed working as designed, not a
-bug. Do not edit the fingerprint, delete the database, or clear
-`guard_control`. Prefer the audited **in-place migration**, which keeps
-every reservation (including PENDING/UNKNOWN), every observation, every
-idempotency key and the pause state untouched:
+`verifyPolicy` auto-advances a stored fingerprint that differs from the
+current config **only by the `reserve` addition**: it writes an
+auto-upgrade audit row and keeps every reservation (including
+PENDING/UNKNOWN), every observation, every idempotency key and the pause
+state untouched. The upgrade is idempotent and verifiable via the audit
+row. A manual `npm run accounting:shared-migration` script remains
+available as an option but is no longer the required path.
 
-1. Stop Proxy and Collector (both instance locks must be free).
-2. Back up `data/` (SQLite file plus WAL) and `config.json` to durable storage outside the repo.
-3. Add per-group `policy.externalSafetyReserve` bounds to `config.json` (peak external tokens/sec × visibility delay + 120s poll interval + margin), and set `policy.proxyProjectDedicatedAttestedUntil` only after reviewing Dashboard project activity for exclusive QuotaFuse use.
-4. Run `npm run accounting:shared-migration -- operator-id 'evidence ticket (>=80 chars): reserve basis, dedication review, Usage/Costs check, backup location'`. It refuses unless the stored policy differs from the current config in exactly the reserve addition, and writes an `accounting_migration_audit` row.
-5. Start the Collector first, verify fresh proxy AND external baselines for both groups via `/quota` (`official_external_usage` must be a number, not null), check Dashboard Usage/Costs, then start the Proxy.
-
-Swapping in a fresh database file is a last resort, not the default: a new
+Swapping in a fresh database file remains a last resort, not the default: a new
 ledger loses idempotency history (a resent old key could dispatch twice),
 drops UNKNOWN/PENDING safety constraints (old unconfirmed requests could be
 re-admitted on top), and restarts baselines from zero. If it is unavoidable,
 drain all traffic, rotate client idempotency keys, independently review every
 old UNKNOWN/PENDING outcome first, and retain the old file as audit archive.
 
-## Proxy-project dedication review
+## Proxy-project sharing (historical note)
 
-`PROXY_PROJECT_SHARED` (sticky) means proxy-scope official usage exceeded
-the dedicated-project upper bound: something besides QuotaFuse is using the
-routing project, or the baseline is broken. Do not clear it by polling:
+Older releases enforced a dedicated routing project via an expiring
+`proxyProjectDedicatedAttestedUntil` attestation plus a sticky
+`PROXY_PROJECT_SHARED` runtime tripwire. **The current release no longer
+produces `PROXY_PROJECT_SHARED`**: the routing project may be shared with
+other services and proxy-scope overages are absorbed conservatively into
+`effective_used` (uncertain tokens deducted twice, never increasing
+admissible capacity). A legacy ledger that still carries a
+`PROXY_PROJECT_SHARED` pause clears it automatically on the next complete
+trusted publish. The tripwire investigation steps below are retained only
+for diagnosing old paused ledgers:
 
 1. Keep services stopped. In the Dashboard, list all API activity for the routing project and identify the foreign key/service.
 2. Remove the foreign traffic (dedicated key rotation or move the other service to its own project).
 3. Check `/responses/input_tokens` preflight attribution as a separate hypothesis: its official billing classification is **unverified** (it cannot be confirmed without a real paid-API check), so a small per-request-shaped overage may be preflight attribution rather than foreign traffic. Do not assume either cause is safe; review Dashboard Usage/Costs for both before proceeding. The tripwire itself keeps **no tolerance** either way.
-4. Re-attest `proxyProjectDedicatedAttestedUntil` with a dated evidence ticket, back up, and restart the Collector for a fresh baseline. The sticky pause clears only via reviewed recovery, never automatically.
+4. Re-attest `proxyProjectDedicatedAttestedUntil` with a dated evidence ticket, back up, and restart the Collector for a fresh baseline. (Compatibility only; not a gate in the current release. The sticky pause clears only via reviewed recovery on old code, or automatically after upgrading.)
 
-## Reviewed DISPATCHED UNKNOWN at UTC rollover
+## Cross-day UNKNOWN: automatic carry
+
+Prior-day unresolved reservations (PENDING/UNKNOWN/MANUAL_REVIEW) no
+longer block the new day: `admit` / `prepareDispatch` / gate stay open
+and each reservation's full `reserved` amount is automatically counted
+into the new day's same-group `effective_used` (`cross_day_carry`).
+History, idempotency keys and UNKNOWN rows are preserved — never
+re-sent, forged COMPLETED, or deleted.
+
+## Reviewed DISPATCHED UNKNOWN at UTC rollover (optional narrowing)
 
 A generation response that has already reached a **terminal status before UTC
 midnight**, but whose usage could not be trusted, may be bounded to its original

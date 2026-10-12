@@ -14,24 +14,23 @@ const end = utcStart + 3600;
 const bucket = (results: any[]) => ({ object: 'page', data: [{ object: 'bucket', start_time: utcStart, end_time: end, results }], has_more: false, next_page: null });
 const evidence = 'operator audit ticket-2026-0199: reviewed Dashboard project activity for proj_test (only QuotaFuse key usage, 2026-10-01..12), verified Costs page shows no unexpected charges, backup stored at ops-vault dated 2026-10-12';
 
-// Dedication attestation gates admission (scoped to the proxy project only).
-test('admission requires fresh proxy-project dedication evidence', () => {
+// Retired attestations are compat-only: never gate admission, never expire
+// into a daily chore. Only the one-time eligibility confirmation remains.
+test('retired project-dedication and costs attestations never gate admission', () => {
   const l = verifiedLedger();
   const oldToken = process.env.QG_PROXY_TOKEN, oldKey = process.env.OPENAI_API_KEY;
   process.env.QG_PROXY_TOKEN = 'dedication-gate-token-1234567890123456';
   process.env.OPENAI_API_KEY = 'sk-test-only';
   try {
-    const missing = cfg() as any;
-    missing.policy.proxyProjectDedicatedAttestedUntil = null;
-    assert.throws(() => gate(missing, l), (e: any) => e.code === 'FREE_QUOTA_UNVERIFIED');
-    assert.ok(readinessIssues(missing, l).includes('PROXY_PROJECT_DEDICATION_UNVERIFIED'));
-    const expired = cfg() as any;
-    expired.policy.proxyProjectDedicatedAttestedUntil = new Date(Date.now() - 1000).toISOString();
-    assert.throws(() => gate(expired, l), (e: any) => e.code === 'FREE_QUOTA_UNVERIFIED');
-    // Other org projects may still share the pool: no org-wide attestation exists or is needed.
     const c = cfg() as any;
+    c.policy.proxyProjectDedicatedAttestedUntil = null;
+    c.policy.manualCostsAuditedUntil = null;
+    assert.doesNotThrow(() => gate(c, l));
+    const issues = readinessIssues(c, l);
+    assert.ok(!issues.includes('PROXY_PROJECT_DEDICATION_UNVERIFIED'));
+    assert.ok(!issues.includes('COST_AUDIT_UNVERIFIED'));
+    // Other org projects may share the pool: no org-wide attestation exists.
     assert.equal(c.policy.exclusiveOrgTrafficAttestedUntil !== undefined, true);
-    assert.doesNotThrow(() => gate(cfg(), l));
   } finally {
     l.close();
     if (oldToken === undefined) delete process.env.QG_PROXY_TOKEN; else process.env.QG_PROXY_TOKEN = oldToken;
@@ -98,8 +97,8 @@ test('delayed partial reflection keeps full reserve until catch-up', () => {
   } finally { l.close(); }
 });
 
-// Collector still polls (read-only) under the sticky sharing pause.
-test('collector keeps polling read-only under PROXY_PROJECT_SHARED', async () => {
+// A retired legacy pause auto-clears on the next good observation.
+test('legacy PROXY_PROJECT_SHARED pause auto-clears on next good observation', async () => {
   const c = cfg(), l = verifiedLedger();
   l.db.prepare("UPDATE guard_control SET paused_reason='PROXY_PROJECT_SHARED' WHERE id=1").run();
   let calls = 0;
@@ -108,14 +107,15 @@ test('collector keeps polling read-only under PROXY_PROJECT_SHARED', async () =>
     return new Response(JSON.stringify(bucket([])), { status: 200 });
   }) as typeof fetch;
   try {
-    await assert.rejects(() => collectOnce(c, l, { fetchImpl, adminKey: 'fake' }), /operator hold/);
+    const r = await collectOnce(c, l, { fetchImpl, adminKey: 'fake' });
     assert.equal(calls, 1);
-    assert.equal(l.pauseReason(), 'PROXY_PROJECT_SHARED');
+    assert.deepEqual(r.proxy, { premium: 0, economy: 0 });
+    assert.equal(l.isPaused(), false);
   } finally { l.close(); }
 });
 
-// In-place migration preserves reservations, UNKNOWN, observations, idempotency.
-test('shared-accounting migration runs in place with full history preserved', () => {
+// Legacy fingerprints auto-adopt on boot: idempotent, audited, history kept.
+test('legacy fingerprint auto-adopts on verify with full history preserved', () => {
   const dir = mkdtempSync(join(tmpdir(), 'qf-shared-mig-'));
   const path = join(dir, 'guard.sqlite');
   try {
@@ -133,14 +133,14 @@ test('shared-accounting migration runs in place with full history preserved', ()
     } finally { setup.close(); }
     const l = new Ledger(path, { recoverPending: false });
     try {
-      // New code refuses to boot on the old fingerprint...
-      assert.throws(() => l.verifyPolicy(c), (e: any) => e.code === 'POLICY_CHANGED');
-      // ...until the audited in-place migration adopts it.
-      l.migrateSharedAccounting(c, 'operator1', evidence);
+      // Boot adopts the compatible fingerprint automatically (no manual step)...
       assert.doesNotThrow(() => l.verifyPolicy(c));
+      // ...writes a verifiable audit row, and stays a no-op on second boot.
       const audit = l.db.prepare('SELECT operator, from_fingerprint, to_fingerprint FROM accounting_migration_audit').get() as any;
-      assert.equal(audit.operator, 'operator1');
+      assert.equal(audit.operator, 'auto-upgrade');
       assert.ok(audit.from_fingerprint !== audit.to_fingerprint);
+      assert.doesNotThrow(() => l.verifyPolicy(c));
+      assert.equal((l.db.prepare('SELECT COUNT(*) AS n FROM accounting_migration_audit').get() as any).n, 1);
       // History fully preserved: UNKNOWN, settlement, observations, pause bit.
       assert.equal(l.find('old-key')?.state, 'UNKNOWN');
       assert.equal(l.find('done-key')?.actual, 20);
@@ -164,4 +164,24 @@ test('migration refuses unrelated policy drift and weak evidence', () => {
     // Stored fingerprint untouched by refused attempts.
     assert.equal((l.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as any).sha256, l.legacyPolicyHash(c));
   } finally { l.close(); }
+});
+
+test('concurrent boots auto-adopt exactly once', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qf-concurrent-mig-'));
+  const path = join(dir, 'guard.sqlite');
+  try {
+    const c = cfg();
+    const setup = new Ledger(path);
+    try {
+      setup.assertPolicy(c);
+      setup.db.prepare('UPDATE policy_fingerprint SET sha256=? WHERE id=1').run(setup.legacyPolicyHash(c));
+    } finally { setup.close(); }
+    const a = new Ledger(path, { recoverPending: false });
+    const b = new Ledger(path, { recoverPending: false });
+    try {
+      assert.doesNotThrow(() => a.verifyPolicy(c));
+      assert.doesNotThrow(() => b.verifyPolicy(c));
+      assert.equal((a.db.prepare('SELECT COUNT(*) AS n FROM accounting_migration_audit').get() as any).n, 1);
+    } finally { a.close(); b.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

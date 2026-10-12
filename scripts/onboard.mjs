@@ -136,8 +136,7 @@ try {
   const eligible = projectValid(c.dataSharing.projectId);
   const proxyKey = keyPresent('OPENAI_API_KEY','.env.proxy');
   const adminKey = keyPresent('OPENAI_ADMIN_KEY','.env.collector');
-  const future = ['eligibilityAttestedUntil','proxyProjectDedicatedAttestedUntil','manualCostsAuditedUntil']
-    .every(k => typeof c.policy[k] === 'string' && Date.parse(c.policy[k]) > Date.now());
+  const future = typeof c.policy.eligibilityAttestedUntil === 'string' && Date.parse(c.policy.eligibilityAttestedUntil) > Date.now();
   console.log('\nQuotaFuse setup (' + (doctor ? 'read-only' : 'offline') + ')');
   console.log('  Data Sharing scope: All projects OR Selected projects; this must already cover the routing Project.');
   console.log('  Selected projects users: choose an already opted-in Project (no special Project required for All projects).');
@@ -162,16 +161,24 @@ try {
   if (c.policy.inputCounter !== 'responses_preflight') pending.push('PREFLIGHT_COUNTER_DISABLED — requires reviewed input-token counter billing');
   if (!c.policy.preflightCostVerified) pending.push('PREFLIGHT_COST_UNVERIFIED — do not enable without evidence');
   for (const [key,description] of [
-    ['eligibilityAttestedUntil','ELIGIBILITY_ATTESTATION_MISSING'],
+    ['eligibilityAttestedUntil','ELIGIBILITY_ATTESTATION_MISSING']]) {
+    if (!c.policy[key] || Date.parse(c.policy[key]) <= Date.now()) pending.push(description + ' — use existing evidence if still valid');
+  }
+  const warnings=[];
+  for (const [key,description] of [
     ['proxyProjectDedicatedAttestedUntil','PROXY_PROJECT_DEDICATION_UNVERIFIED'],
     ['manualCostsAuditedUntil','COST_AUDIT_UNVERIFIED']]) {
-    if (!c.policy[key] || Date.parse(c.policy[key]) <= Date.now()) pending.push(description + ' — use existing evidence if still valid');
+    if (!c.policy[key] || Date.parse(c.policy[key]) <= Date.now()) warnings.push(description + ' — compatibility only, no longer a gate; re-attestation not required');
   }
   if (!c.policy.externalSafetyReserve || !Number.isSafeInteger(c.policy.externalSafetyReserve.premium) || !Number.isSafeInteger(c.policy.externalSafetyReserve.economy))
     pending.push('EXTERNAL_RESERVE_MISSING — configure per-group externalSafetyReserve bounds');
   if (pending.length) {
     console.log('  Pending prerequisites:');
     for (const issue of pending) console.log('    - '+issue);
+  }
+  if (warnings.length) {
+    console.log('  Compatibility warnings (non-blocking):');
+    for (const issue of warnings) console.log('    - '+issue);
   }
   if (!eligible || !proxyKey || !adminKey)
     console.log('  NEXT STEP: In your own Terminal (not an agent tool), run npm run configure:local');
