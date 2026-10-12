@@ -78,7 +78,7 @@ routing project, or the baseline is broken. Do not clear it by polling:
 
 1. Keep services stopped. In the Dashboard, list all API activity for the routing project and identify the foreign key/service.
 2. Remove the foreign traffic (dedicated key rotation or move the other service to its own project).
-3. Confirm preflight `/responses/input_tokens` attribution if the overage is small and per-request shaped.
+3. Check `/responses/input_tokens` preflight attribution as a separate hypothesis: its official billing classification is **unverified** (it cannot be confirmed without a real paid-API check), so a small per-request-shaped overage may be preflight attribution rather than foreign traffic. Do not assume either cause is safe; review Dashboard Usage/Costs for both before proceeding. The tripwire itself keeps **no tolerance** either way.
 4. Re-attest `proxyProjectDedicatedAttestedUntil` with a dated evidence ticket, back up, and restart the Collector for a fresh baseline. The sticky pause clears only via reviewed recovery, never automatically.
 
 ## Reviewed DISPATCHED UNKNOWN at UTC rollover

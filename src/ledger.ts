@@ -260,7 +260,7 @@ export class Ledger {
       if (!Number.isSafeInteger(localUpper))
         throw new LedgerError('INVALID_USAGE', 'Usage overflow');
       if (proxyTokens > localUpper)
-        throw new LedgerError('PROXY_PROJECT_SHARED', 'Proxy-scope official usage exceeds dedicated-project upper bound');
+        throw new LedgerError('PROXY_PROJECT_SHARED', 'Proxy-scope official usage exceeds dedicated-project upper bound (possible project sharing or counted preflight input_tokens; see runbook)');
     }
     // Delayed official aggregation may reflect proxy completions late; the
     // snapshot formula handles that conservatively with max(). Only
@@ -299,9 +299,10 @@ export class Ledger {
    * Proxy and external scopes are validated and written in ONE transaction so
    * admission never observes a half-updated pair. A recoverable collector
    * pause is cleared; sticky operator/invariant holds are preserved.
-   * Unknown external models (outside the reviewed official map) may be
-   * attached for diagnostics; their tokens are already inside `external`
-   * (conservative premium accounting) and are recorded, never ignored. */
+   * `external` holds CONFIRMED-group tokens only; group-unconfirmed
+   * (unknown-model) tokens arrive via `unknownModels`, are recorded for
+   * diagnostics, and the snapshot counts them in BOTH groups. Never merge
+   * unknown tokens into `external`, or Premium would double-count them. */
   publishSharedUsage(day: string, proxy: Record<Group,number>, external: Record<Group,number>, at = new Date(), unknownModels?: Record<string, { group: Group; tokens: number }>): void {
     let validationFailure: LedgerError | null = null;
     this.tx(() => {
@@ -346,6 +347,16 @@ export class Ledger {
       // Pre-006 read-only opens never recorded diagnostics: none exist.
       return [];
     }
+  }
+  /** Day total of external tokens whose group is unconfirmed. Counted in
+   * BOTH groups' conservative estimates: the tokens belong to exactly one
+   * group, so each per-group upper bound stays safe. Strict: any storage
+   * failure throws fail-closed rather than undercounting. */
+  private unknownExternalTotal(day: string): number {
+    const r = this.db.prepare('SELECT COALESCE(SUM(tokens),0) AS t FROM external_unknown_models WHERE utc_day=?').get(day) as any;
+    if (typeof r?.t !== 'number' || !Number.isSafeInteger(r.t) || r.t < 0)
+      throw new LedgerError('INVALID_USAGE', 'Unverifiable unknown-model accounting');
+    return r.t;
   }
   /** Legacy compat: proxy-only publish. External scope is carried over when
    * known, otherwise the row stays fail-closed (external unknown). Prefer
@@ -401,13 +412,17 @@ export class Ledger {
     const safetyCap = Math.floor(config.quotas[group].dailyTokens * config.policy.safetyPct / 100);
     // Organization-aware shared-quota accounting.
     //
-    // effective_used = official_external
+    // effective_used = official_external_known + unknown_external
     //   + max(official_proxy, verified_proxy_baseline + proxy_local_committed)
     //   + external_safety_reserve
     //
-    // - official_external: other projects' cumulative usage in this group/day.
-    //   External services may legally bypass the proxy; their consumption is
-    //   expected, never an invariant failure.
+    // - official_external_known: other projects' cumulative usage with a
+    //   confirmed group. External services may legally bypass the proxy;
+    //   their consumption is expected, never an invariant failure.
+    // - unknown_external: external tokens whose group is unconfirmed. They
+    //   belong to exactly one group, so counting them in BOTH groups keeps
+    //   each per-group estimate a safe upper bound (never Economy
+    //   undercount, never double-count of confirmed models).
     // - max(official_proxy, baseline + committed): settled proxy tokens already
     //   reflected in the official aggregate must not be double-counted, while
     //   locally committed but not-yet-visible proxy usage keeps its full
@@ -423,10 +438,12 @@ export class Ledger {
     const proxyEffective = anchored
       ? Math.max(obs!.official_high_watermark, (obs!.anchor_tokens as number) + proxyCommitted)
       : safetyCap;
+    const unknownExternal = this.unknownExternalTotal(day);
+    const externalTotal = externalKnown ? (obs!.official_external as number) + unknownExternal : 0;
     const effective = anchored && externalKnown
-      ? (obs!.official_external as number) + proxyEffective + reserve
+      ? externalTotal + proxyEffective + reserve
       : safetyCap;
-    if (!Number.isSafeInteger(proxyEffective) || !Number.isSafeInteger(effective)) throw new LedgerError('INVALID_USAGE', 'Usage overflow');
+    if (!Number.isSafeInteger(proxyEffective) || !Number.isSafeInteger(externalTotal) || !Number.isSafeInteger(effective)) throw new LedgerError('INVALID_USAGE', 'Usage overflow');
     const ageMs = !!obs && anchored && externalKnown ? now.getTime() - Date.parse(obs.reconciled_at) : NaN;
     const fresh = anchored && externalKnown && !!obs && ageMs >= 0 && ageMs <= config.policy.reconcileMaxAgeSeconds * 1000;
     const observationAge = !!obs && Number.isFinite(Date.parse(obs.reconciled_at)) ? Math.max(0, Math.floor((now.getTime() - Date.parse(obs.reconciled_at)) / 1000)) : null;
@@ -438,7 +455,8 @@ export class Ledger {
     else if (effective >= safetyCap) state = 'EXHAUSTED';
     else state = 'READY';
     const confidence = (state === 'READY' || state === 'EXHAUSTED') ? 'CONDITIONAL' : 'UNVERIFIED';
-    const officialOrg = externalKnown && obs ? (obs.official_high_watermark + (obs.official_external as number)) : null;
+    const officialOrg = externalKnown && obs && Number.isSafeInteger(obs.official_high_watermark + externalTotal)
+      ? (obs.official_high_watermark + externalTotal) : null;
     return {
       group, utc_day: day, limit: config.quotas[group].dailyTokens, safety_cap: safetyCap,
       // Shared-org fields (null = unknown, never fabricated zero).
@@ -448,6 +466,7 @@ export class Ledger {
       proxy_local_committed: proxyCommitted,
       proxy_pending_reserved: outstanding,
       external_safety_reserve: reserve,
+      external_unknown_tokens: unknownExternal,
       effective_used: anchored && externalKnown ? effective : null,
       estimated_remaining: (state === 'READY') ? Math.max(0, safetyCap - effective) : 0,
       last_successful_poll: obs?.reconciled_at ?? null,

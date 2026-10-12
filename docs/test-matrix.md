@@ -21,6 +21,8 @@ All automated tests use mock upstream responses; no live billing calls are made.
 | 16 Auth/host/header/path restrictions | PARTIAL | Auth and path/header mock tests; hostile remote origin test pending |
 | 17 OMP fallback | DEMO ONLY | Provider contract; real OMP integration pending |
 | 18 Uncontrolled org traffic | PASS mock | External scope recorded, whitelist bypassed for external models, unknown models conservative + diagnostics, admission tightened; collection never stops; in-project mixing trips sticky lock |
+| 18a External unknown models counted bilaterally | PASS mock | Formula `official_external_known + unknown_external + max(...)` in both groups; known models never double-counted; safe-int overflow fails closed |
+| 18b Preflight attribution tripwire | PASS mock | Tight tripwire verified across normal/reflected/delayed/partial/sharing scenarios; `/responses/input_tokens` attribution unverified, fail-closed; runbook排查 item; no verified-safe claim |
 | 19 Billing dashboard reconciliation | NOT RUN | Needs real audited eligible project, human verification |
 | 20 Fault tracking + recovery | PARTIAL | Fail closed/UNKNOWN; reviewed manual recovery SOP only |
 

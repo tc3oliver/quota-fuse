@@ -51,7 +51,7 @@ test('api failure preserves checkpoint and never blocks the next poll', async ()
   l.complete('cover', 100);
   l.publishSharedUsage(day, { premium: 100, economy: 0 }, { premium: 50, economy: 0 });
   let calls = 0;
-  const retryPage = bucket([proxyRow(c, 50), extRow(c, 25)]);
+  const retryPage = bucket([proxyRow(c, 50), { model: 'gpt-4.1-2025-04-14', project_id: 'proj_external', input_tokens: 25, output_tokens: 25 }]);
   const flaky = (async () => {
     calls++;
     if (calls === 1) return new Response('', { status: 503 });
@@ -98,7 +98,7 @@ test('regression across either scope pauses without overwriting', async () => {
   l.admit(c, { key: 'cover', hash: 'cover', requestId: 'cover', model: c.quotas.premium.models[0], group: 'premium', day, reserve: 100 });
   l.complete('cover', 100);
   l.publishSharedUsage(day, { premium: 100, economy: 0 }, { premium: 80, economy: 0 });
-  const fetchImpl = (async () => new Response(JSON.stringify(bucket([proxyRow(c, 50), { ...extRow(c, 10), input_tokens: 10, output_tokens: 10 }])), { status: 200 })) as typeof fetch;
+  const fetchImpl = (async () => new Response(JSON.stringify(bucket([proxyRow(c, 50), { model: 'gpt-4.1-2025-04-14', project_id: 'proj_external', input_tokens: 10, output_tokens: 10 }])), { status: 200 })) as typeof fetch;
   // proxy 100 steady, external 20 < 80 -> external regression
   try {
     await assert.rejects(() => collectOnce(c, l, { fetchImpl, adminKey: 'fake' }), /decreased/);

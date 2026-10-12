@@ -67,11 +67,15 @@ test('external unknown models are counted conservatively with diagnostics', asyn
   const fetchImpl = (async () => new Response(JSON.stringify(bucket(rows)), { status: 200 })) as typeof fetch;
   try {
     const result = await collectOnce(c, l, { fetchImpl, adminKey: 'fake' });
-    assert.deepEqual(result.external, { premium: 10, economy: 0 });
+    assert.deepEqual(result.external, { premium: 0, economy: 0 });
     assert.deepEqual(result.unknownModels, { 'future-model-2099': { group: 'premium', tokens: 10 } });
     assert.equal(l.isPaused(), false);
     const snap = l.snapshot(c, day, 'premium');
     assert.equal(snap.state, 'READY');
+    // Unknown tokens land in BOTH groups' conservative estimates.
+    assert.equal(snap.external_unknown_tokens, 10);
+    assert.equal(snap.effective_used, 10 + 10000);
+    assert.equal(l.snapshot(c, day, 'economy').effective_used, 10 + 100000);
     assert.deepEqual(snap.external_unknown_models, [{ model: 'future-model-2099', group: 'premium', tokens: 10 }]);
   } finally { l.close(); }
 });
