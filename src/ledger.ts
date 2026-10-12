@@ -22,13 +22,20 @@ const migration = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 
 const safeInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 // A healthy collector may clear ONLY these known transport/readiness pauses.
 // Invariant failures, operator holds and unrecognized reasons remain sticky.
+// Shared-org note: external-service consumption is LEGITIMATE and never an
+// invariant failure; recoverable pauses below are cleared by the next complete
+// trusted observation. Sticky holds still require audited operator review.
 const collectorRecoverable = new Set<string | null>([
   null, 'COLLECTOR_NOT_VERIFIED', 'COLLECTOR_UNVERIFIED', 'COLLECTOR_DOWN',
-  'COLLECTOR_REFRESHING' // recovery from an older interrupted deployment
+  'COLLECTOR_REFRESHING', // recovery from an older interrupted deployment
+  'STALE_OBSERVATION', 'DATA_UNVERIFIED',
 ]);
 const collectorInvariantFailures = new Set([
-  'ACTUAL_EXCEEDS_RESERVED', 'UNACCOUNTED_OFFICIAL_USAGE',
+  'ACTUAL_EXCEEDS_RESERVED',
   'OFFICIAL_WATERMARK_REGRESSION', 'ANCHOR_UNVERIFIED'
+  // NOTE: UNACCOUNTED_OFFICIAL_USAGE is intentionally REMOVED. The org pool is
+  // shared with production services that bypass the proxy; official totals
+  // above the local ledger are expected, not anomalous.
 ]);
 
 export class Ledger {
@@ -50,6 +57,14 @@ export class Ledger {
     this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/002_reconciliation.sql'), 'utf8'));
     this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/003_dispatched_day_reviews.sql'), 'utf8'));
     this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/004_incomplete_settlements.sql'), 'utf8'));
+    // 005: organization-aware shared-quota observations. Additive only: new
+    // nullable columns default to NULL (= unknown external usage) so old rows
+    // stay fail-closed until a trusted new-day baseline arrives. Guarded like
+    // anchor_tokens/phase so reopening a migrated database is a no-op.
+    // Canonical SQL is kept in migrations/005_shared_observations.sql.
+    if (!columns('observations').includes('official_external')) this.db.exec('ALTER TABLE observations ADD COLUMN official_external INTEGER CHECK(official_external >= 0)');
+    if (!columns('observations').includes('last_poll_attempt')) this.db.exec('ALTER TABLE observations ADD COLUMN last_poll_attempt TEXT');
+    if (!columns('observations').includes('last_poll_error')) this.db.exec('ALTER TABLE observations ADD COLUMN last_poll_error TEXT');
     this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA synchronous = FULL;');
     if (options.recoverPending !== false) this.recoverPending();
   }
@@ -75,6 +90,9 @@ export class Ledger {
       counter: config.policy.inputCounter,
       structuredTextVerified: config.policy.structuredTextVerified === true,
       localAgentTools: true,
+      // Shared-org guard: the external safety reserve directly tightens
+      // admission. It must be fingerprinted so relaxation fails closed.
+      externalSafetyReserve: config.policy.externalSafetyReserve,
       // Backward-compatible fingerprint: existing ledgers keep legacy
       // premium-only classification until an audited policy transition.
       ...(config.dataSharing.modelGroupAccounting === 'official_v1'
@@ -158,16 +176,18 @@ export class Ledger {
   enterManualReview(): void {
     this.tx(() => this.db.prepare("UPDATE guard_control SET paused_reason='MANUAL_REVIEW' WHERE id=1 AND paused_reason IS NULL").run());
   }
-  observation(day: string, group: Group): { official_high_watermark: number; anchor_tokens: number | null; reconciled_at: string } | undefined {
-    return this.db.prepare('SELECT official_high_watermark, anchor_tokens, reconciled_at FROM observations WHERE utc_day=? AND group_name=?').get(day, group) as any;
+  observation(day: string, group: Group): { official_high_watermark: number; anchor_tokens: number | null; reconciled_at: string; official_external: number | null; last_poll_attempt: string | null; last_poll_error: string | null } | undefined {
+    return this.db.prepare('SELECT official_high_watermark, anchor_tokens, reconciled_at, official_external, last_poll_attempt, last_poll_error FROM observations WHERE utc_day=? AND group_name=?').get(day, group) as any;
   }
   /** No network calls or long-running work are performed while holding a write lock. */
-  private validateObservation(day: string, group: Group, tokens: number, at: Date): void {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !safeInt(tokens) || !Number.isFinite(at.getTime()))
+  private validateSharedObservation(day: string, group: Group, proxyTokens: number, externalTokens: number, at: Date): void {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !safeInt(proxyTokens) || !safeInt(externalTokens) || !Number.isFinite(at.getTime()))
       throw new LedgerError('INVALID_OBSERVATION', 'Invalid official reading');
     const old = this.observation(day, group);
-    if (old && tokens < old.official_high_watermark)
-      throw new LedgerError('OFFICIAL_WATERMARK_REGRESSION', 'Official reading decreased');
+    if (old && proxyTokens < old.official_high_watermark)
+      throw new LedgerError('OFFICIAL_WATERMARK_REGRESSION', 'Official proxy reading decreased');
+    if (old && old.official_external !== null && old.official_external !== undefined && externalTokens < old.official_external)
+      throw new LedgerError('OFFICIAL_WATERMARK_REGRESSION', 'Official external reading decreased');
     if (old && old.anchor_tokens === null)
       throw new LedgerError('ANCHOR_UNVERIFIED', 'Legacy checkpoint cannot be trusted without a verified reconciliation baseline');
     if (!old) {
@@ -175,36 +195,53 @@ export class Ledger {
       if (present.n) throw new LedgerError('ANCHOR_UNVERIFIED', 'Cannot initialize a baseline after local requests were admitted');
     }
     if (at.getTime() > Date.now() + 5000) throw new LedgerError('CLOCK_SKEW', 'Future collector checkpoint');
-    if (old) {
-      const { settled, outstanding } = this.usage(day, group);
-      const knownUpperBound = old.anchor_tokens! + settled + outstanding;
-      if (!Number.isSafeInteger(knownUpperBound) || tokens > knownUpperBound)
-        throw new LedgerError('UNACCOUNTED_OFFICIAL_USAGE', 'Official reading exceeds verified baseline plus local upper bound');
-    }
+    // Shared-org design: external-service consumption is legitimate. Official
+    // proxy totals above (baseline + local upper bound) are NOT an invariant
+    // failure — the proxy project scope is the dedup boundary, and delayed
+    // official aggregation may reflect completions late. The snapshot formula
+    // below handles both cases conservatively with max().
   }
-  private saveObservation(day: string, group: Group, tokens: number, at: Date): void {
-    this.db.prepare(`INSERT INTO observations(utc_day,group_name,official_high_watermark,anchor_tokens,reconciled_at) VALUES(?,?,?,?,?)
-      ON CONFLICT(utc_day,group_name) DO UPDATE SET official_high_watermark=excluded.official_high_watermark,reconciled_at=excluded.reconciled_at`)
-      .run(day, group, tokens, tokens, at.toISOString());
+  private saveSharedObservation(day: string, group: Group, proxyTokens: number, externalTokens: number, at: Date): void {
+    const iso = at.toISOString();
+    this.db.prepare(`INSERT INTO observations(utc_day,group_name,official_high_watermark,anchor_tokens,reconciled_at,official_external,last_poll_attempt,last_poll_error) VALUES(?,?,?,?,?,?,?,NULL)
+      ON CONFLICT(utc_day,group_name) DO UPDATE SET official_high_watermark=excluded.official_high_watermark,reconciled_at=excluded.reconciled_at,official_external=excluded.official_external,last_poll_attempt=excluded.last_poll_attempt,last_poll_error=NULL`)
+      .run(day, group, proxyTokens, proxyTokens, iso, externalTokens, iso);
   }
+  /** Legacy single-scope write kept for tests and operator tooling.
+   * Proxy scope is updated; a previously recorded external watermark is
+   * preserved (never fabricated as zero). Fresh rows keep external NULL
+   * (= unknown) and therefore stay fail-closed until shared collection. */
   recordObservation(day: string, group: Group, tokens: number, at = new Date()): void {
     this.tx(() => {
-      this.validateObservation(day, group, tokens, at);
-      this.saveObservation(day, group, tokens, at);
+      const old = this.observation(day, group);
+      if (old) {
+        this.validateSharedObservation(day, group, tokens, old.official_external ?? 0, at);
+        if (old.official_external === null || old.official_external === undefined)
+          throw new LedgerError('ANCHOR_UNVERIFIED', 'External baseline unknown; shared collector baseline required');
+        this.saveSharedObservation(day, group, tokens, old.official_external, at);
+      } else {
+        const present = this.db.prepare('SELECT COUNT(*) AS n FROM reservations WHERE utc_day=? AND group_name=?').get(day, group) as {n:number};
+        if (present.n) throw new LedgerError('ANCHOR_UNVERIFIED', 'Cannot initialize a baseline after local requests were admitted');
+        if (at.getTime() > Date.now() + 5000) throw new LedgerError('CLOCK_SKEW', 'Future collector checkpoint');
+        // No external scope yet: stays fail-closed until publishSharedUsage.
+        const iso = at.toISOString();
+        this.db.prepare(`INSERT INTO observations(utc_day,group_name,official_high_watermark,anchor_tokens,reconciled_at,official_external,last_poll_attempt,last_poll_error) VALUES(?,?,?,?,?,NULL,?,NULL)`)
+          .run(day, group, tokens, tokens, iso, iso);
+      }
     });
   }
-  /** A collector may fetch off-lock while the existing verified watermark is fresh.
-   * Publish both groups and clear a recoverable collector pause in ONE transaction,
-   * so admission never observes a half-updated pair of official baselines.
-   * Any accounting invariant failure pauses in that same transaction. */
-  publishOfficialUsage(day: string, sums: Record<Group,number>, at = new Date()): void {
+  /** Publish a complete org-wide observation for both groups atomically.
+   * Proxy and external scopes are validated and written in ONE transaction so
+   * admission never observes a half-updated pair. A recoverable collector
+   * pause is cleared; sticky operator/invariant holds are preserved. */
+  publishSharedUsage(day: string, proxy: Record<Group,number>, external: Record<Group,number>, at = new Date()): void {
     let validationFailure: LedgerError | null = null;
     this.tx(() => {
       if (!collectorRecoverable.has(this.pauseReason()))
         throw new LedgerError('MANUAL_REVIEW_REQUIRED', 'Collector cannot replace an operator hold or accounting failure');
       try {
         for (const group of ['premium','economy'] as const)
-          this.validateObservation(day, group, sums[group], at);
+          this.validateSharedObservation(day, group, proxy[group], external[group], at);
       } catch (e) {
         if (!(e instanceof LedgerError)) throw e;
         validationFailure = e;
@@ -215,10 +252,39 @@ export class Ledger {
         return;
       }
       for (const group of ['premium','economy'] as const)
-        this.saveObservation(day, group, sums[group], at);
+        this.saveSharedObservation(day, group, proxy[group], external[group], at);
       this.db.prepare('UPDATE guard_control SET paused_reason=NULL WHERE id=1').run();
     });
     if (validationFailure) throw validationFailure;
+  }
+  /** Legacy compat: proxy-only publish. External scope is carried over when
+   * known, otherwise the row stays fail-closed (external unknown). Prefer
+   * publishSharedUsage for all new collector paths. */
+  publishOfficialUsage(day: string, sums: Record<Group,number>, at = new Date()): void {
+    const external: Record<Group, number> = { premium: 0, economy: 0 };
+    let carryFailed = false;
+    for (const group of ['premium','economy'] as const) {
+      const old = this.observation(day, group);
+      if (old?.official_external === null || old?.official_external === undefined) { carryFailed = true; break; }
+      external[group] = old!.official_external as number;
+    }
+    if (carryFailed) {
+      // No trustworthy external scope: record the proxy reading attempt as a
+      // data-unverified pause instead of fabricating external zero usage.
+      this.pauseCollectorFailure('DATA_UNVERIFIED');
+      throw new LedgerError('DATA_UNVERIFIED', 'External org scope unknown; shared collector baseline required');
+    }
+    return this.publishSharedUsage(day, sums, external, at);
+  }
+  /** Record a poll attempt (success clears error; failure preserves watermarks).
+   * Works under any pause reason: the collector keeps polling read-only even
+   * while admission is held. Never fabricates zero usage on failure. */
+  recordPollAttempt(day: string, group: Group, at: Date, error: string | null): void {
+    const iso = at.toISOString();
+    const code = error && /^[A-Z_]{1,60}$/.test(error) ? error : (error ? 'COLLECTOR_UNVERIFIED' : null);
+    // UPDATE only: a failed poll must never fabricate a checkpoint row.
+    this.db.prepare(`UPDATE observations SET last_poll_attempt=?,last_poll_error=? WHERE utc_day=? AND group_name=?`)
+      .run(iso, code, day, group);
   }
   /** Fail closed on unavailable/untrustworthy collector data without erasing a
    * stronger pre-existing pause, even if it was set during an in-flight fetch. */
@@ -230,7 +296,7 @@ export class Ledger {
           .run(collectorInvariantFailures.has(reason) ? reason : 'COLLECTOR_UNVERIFIED');
     });
   }
-  collectorMayPoll(): boolean { return collectorRecoverable.has(this.pauseReason()); }
+  collectorMayPoll(): boolean { return true; }
   private usage(day: string, group: Group) {
     const s = this.db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN state IN ('COMPLETED','RECONCILED') THEN actual ELSE 0 END),0) AS settled,
@@ -243,23 +309,66 @@ export class Ledger {
     const obs = this.observation(day, group);
     const { settled, outstanding, unknown } = this.usage(day, group);
     const safetyCap = Math.floor(config.quotas[group].dailyTokens * config.policy.safetyPct / 100);
-    // Anchor = first vetted official snapshot BEFORE any local request of this group/day.
-    // ALL subsequent local completions AND reservations count against that baseline.
-    // Later official totals can include these same local requests, so MAX avoids
-    // double-counting. This is conditional on exclusive-org traffic and a verified
-    // complete baseline; Admin Usage is neither real-time nor a free-balance oracle.
+    // Organization-aware shared-quota accounting.
+    //
+    // effective_used = official_external
+    //   + max(official_proxy, verified_proxy_baseline + proxy_local_committed)
+    //   + external_safety_reserve
+    //
+    // - official_external: other projects' cumulative usage in this group/day.
+    //   External services may legally bypass the proxy; their consumption is
+    //   expected, never an invariant failure.
+    // - max(official_proxy, baseline + committed): settled proxy tokens already
+    //   reflected in the official aggregate must not be double-counted, while
+    //   locally committed but not-yet-visible proxy usage keeps its full
+    //   reservation. The proxy project scope is the dedup boundary.
+    // - external_safety_reserve: conservative operator-configured bound for
+    //   external consumption during official visibility delay + poll interval.
+    // - This is a conservative admission estimate, NOT an official promise of
+    //   free balance. Unbounded external traffic cannot guarantee zero fees.
+    const reserve = config.policy.externalSafetyReserve[group];
     const anchored = obs?.anchor_tokens !== null && obs?.anchor_tokens !== undefined;
-    const committed = anchored
-      ? Math.max(obs.official_high_watermark, (obs!.anchor_tokens as number) + settled + outstanding)
+    const externalKnown = obs?.official_external !== null && obs?.official_external !== undefined;
+    const proxyCommitted = settled + outstanding;
+    const proxyEffective = anchored
+      ? Math.max(obs!.official_high_watermark, (obs!.anchor_tokens as number) + proxyCommitted)
       : safetyCap;
-    if (!Number.isSafeInteger(committed)) throw new LedgerError('INVALID_USAGE', 'Usage overflow');
-    const fresh = anchored && !!obs && now.getTime() - Date.parse(obs.reconciled_at) >= 0 && now.getTime() - Date.parse(obs.reconciled_at) <= config.policy.reconcileMaxAgeSeconds * 1000;
+    const effective = anchored && externalKnown
+      ? (obs!.official_external as number) + proxyEffective + reserve
+      : safetyCap;
+    if (!Number.isSafeInteger(proxyEffective) || !Number.isSafeInteger(effective)) throw new LedgerError('INVALID_USAGE', 'Usage overflow');
+    const ageMs = !!obs && anchored && externalKnown ? now.getTime() - Date.parse(obs.reconciled_at) : NaN;
+    const fresh = anchored && externalKnown && !!obs && ageMs >= 0 && ageMs <= config.policy.reconcileMaxAgeSeconds * 1000;
+    const observationAge = !!obs && Number.isFinite(Date.parse(obs.reconciled_at)) ? Math.max(0, Math.floor((now.getTime() - Date.parse(obs.reconciled_at)) / 1000)) : null;
+    // Detailed data state. Legacy PAUSED_UNVERIFIED is kept as the generic
+    // fallback for callers that only distinguish ready/exhausted/paused.
+    let state: string;
+    if (!anchored || !externalKnown) state = 'DATA_UNVERIFIED';
+    else if (!fresh) state = 'STALE';
+    else if (effective >= safetyCap) state = 'EXHAUSTED';
+    else state = 'READY';
+    const confidence = (state === 'READY' || state === 'EXHAUSTED') ? 'CONDITIONAL' : 'UNVERIFIED';
+    const officialOrg = externalKnown && obs ? (obs.official_high_watermark + (obs.official_external as number)) : null;
     return {
       group, utc_day: day, limit: config.quotas[group].dailyTokens, safety_cap: safetyCap,
+      // Shared-org fields (null = unknown, never fabricated zero).
+      official_org_usage: officialOrg,
+      official_external_usage: externalKnown ? (obs!.official_external as number) : null,
+      official_proxy_usage: obs?.official_high_watermark ?? null,
+      proxy_local_committed: proxyCommitted,
+      proxy_pending_reserved: outstanding,
+      external_safety_reserve: reserve,
+      effective_used: anchored && externalKnown ? effective : null,
+      estimated_remaining: (state === 'READY') ? Math.max(0, safetyCap - effective) : 0,
+      last_successful_poll: obs?.reconciled_at ?? null,
+      last_poll_attempt: (obs as any)?.last_poll_attempt ?? null,
+      observation_age_seconds: observationAge,
+      state, pause_reason: this.pauseReason(),
+      // Legacy compat fields (do not use for new capacity math).
       admitted_reserved: outstanding, local_settled: settled, official_observed: obs?.official_high_watermark ?? null,
       baseline_observed: obs?.anchor_tokens ?? null,
-      estimated_remaining: Math.max(0, safetyCap - committed), confidence: fresh ? 'CONDITIONAL' : 'UNVERIFIED',
-      last_reconciled_at: obs?.reconciled_at ?? null, state: fresh ? (committed >= safetyCap ? 'EXHAUSTED' : 'READY') : 'PAUSED_UNVERIFIED',
+      confidence,
+      last_reconciled_at: obs?.reconciled_at ?? null,
       next_reset_at: nextReset(day), unknown_reserved: unknown
     };
   }
@@ -339,7 +448,7 @@ export class Ledger {
       if (existing) throw new LedgerError(existing.body_hash === args.hash ? 'DUPLICATE_REQUEST' : 'IDEMPOTENCY_CONFLICT', 'Idempotency key is already used; no replay allowed');
       if (this.hasCrossDayUnknown(args.day)) throw new LedgerError('FREE_QUOTA_UNVERIFIED', 'Prior-day reservations require review');
       const view = this.snapshot(config, args.day, args.group, args.now ?? new Date());
-      if (view.state === 'PAUSED_UNVERIFIED') throw new LedgerError('FREE_QUOTA_UNVERIFIED', 'Collector checkpoint stale or missing');
+      if (view.confidence !== 'CONDITIONAL') throw new LedgerError('FREE_QUOTA_UNVERIFIED', 'Collector checkpoint stale or missing');
       if (args.reserve > view.estimated_remaining) throw new LedgerError('FREE_QUOTA_EXHAUSTED', 'Not enough guarded free-token capacity');
       const at = (args.now ?? new Date()).toISOString();
       this.db.prepare(`INSERT INTO reservations(idempotency_key,request_id,body_hash,model,group_name,utc_day,reserved,actual,state,admitted_at,updated_at)

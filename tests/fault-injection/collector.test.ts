@@ -16,7 +16,7 @@ test('complete paginated usage aggregates groups then unpauses',async()=>{
   let calls=0;
   const fetchImpl=(async()=>new Response(JSON.stringify(pages[calls++]),{status:200})) as typeof fetch;
   try {const result=await collectOnce(c,l,{fetchImpl,adminKey:'fake-admin-test'});
-    assert.deepEqual(result,{premium:200,economy:400});assert.equal(calls,2);assert.equal(l.isPaused(),false);
+    assert.deepEqual(result,{proxy:{premium:200,economy:400},external:{premium:0,economy:0}});assert.equal(calls,2);assert.equal(l.isPaused(),false);
   }finally{l.close();}
 });
 test('failed page closes admission and preserves old watermark',async()=>{
@@ -27,10 +27,14 @@ test('failed page closes admission and preserves old watermark',async()=>{
     assert.equal(l.observation(new Date().toISOString().slice(0,10),'premium')?.official_high_watermark,500);
   }finally{l.close();}
 });
-test('foreign-project usage fails collector even when model is allowed',async()=>{
+test('foreign-project usage is recorded as external scope, not a collector failure',async()=>{
   const l=new Ledger(':memory:'),c=cfg(),one=page([row(c.quotas.premium.models[0],100)]);one.data[0].results[0].project_id='another-project';
   const fetchImpl=(async()=>new Response(JSON.stringify(one))) as typeof fetch;
-  try {await assert.rejects(()=>collectOnce(c,l,{fetchImpl,adminKey:'fake'}));assert.equal(l.isPaused(),true);}finally{l.close();}
+  try {const result=await collectOnce(c,l,{fetchImpl,adminKey:'fake'});
+    assert.deepEqual(result,{proxy:{premium:0,economy:0},external:{premium:200,economy:0}});
+    assert.equal(l.isPaused(),false);
+    assert.equal(l.observation(new Date().toISOString().slice(0,10),'premium')?.official_external,200);
+  }finally{l.close();}
 });
 test('usage endpoint failure pauses immediately',async()=>{
   const l=new Ledger(':memory:'),c=cfg();
@@ -53,27 +57,35 @@ test('empty official usage page is not trusted as zero usage', async()=> {
   } finally {l.close();}
 });
 
-test('unaccounted official usage pauses collector persistently',async()=>{
+test('proxy usage above local ledger is accepted; collector keeps polling after transport failure',async()=>{
  const l=new Ledger(':memory:'),c=cfg();
  const day=new Date().toISOString().slice(0,10);
- l.recordObservation(day,'premium',0);l.recordObservation(day,'economy',0);l.setPause(null);
+ l.publishSharedUsage(day,{premium:0,economy:0},{premium:0,economy:0});
  const fake=(async()=>new Response(JSON.stringify(page([row(c.quotas.premium.models[0],1)])))) as typeof fetch;
  try{
-  await assert.rejects(()=>collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'}),/Official reading exceeds/);
-  assert.equal(l.pauseReason(),'UNACCOUNTED_OFFICIAL_USAGE');
-  assert.equal(l.observation(day,'premium')?.official_high_watermark,0);
-  await assert.rejects(()=>collectOnce(c,l,{fetchImpl:(async()=>{throw new Error('must not query');}) as typeof fetch,adminKey:'test-admin'}),/Manual operator review required/);
-  assert.equal(l.pauseReason(),'UNACCOUNTED_OFFICIAL_USAGE');
+  const result=await collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'});
+  assert.deepEqual(result.proxy,{premium:2,economy:0});
+  assert.equal(l.isPaused(),false);
+  assert.equal(l.observation(day,'premium')?.official_high_watermark,2);
+  // A later transport failure pauses admission but stays recoverable:
+  // the next cycle still polls instead of locking permanently.
+  await assert.rejects(()=>collectOnce(c,l,{fetchImpl:(async()=>new Response('',{status:503})) as typeof fetch,adminKey:'test-admin'}),/Admin Usage API unsuccessful/);
+  assert.equal(l.pauseReason(),'COLLECTOR_UNVERIFIED');
+  const retry=await collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'});
+  assert.equal(retry.proxy.premium,2);
+  assert.equal(l.isPaused(),false);
  }finally{l.close();}
 });
 test('collector cannot clear breached per-request usage bound',async()=>{
  const l=new Ledger(':memory:'),c=cfg(),day=new Date().toISOString().slice(0,10);
  try{
-  l.recordObservation(day,'premium',0);l.recordObservation(day,'economy',0);l.setPause(null);
+  l.publishSharedUsage(day,{premium:0,economy:0},{premium:0,economy:0});
   l.admit(c,{key:'excess',hash:'h',requestId:'r',model:c.quotas.premium.models[0],group:'premium',day,reserve:10});
   assert.throws(()=>l.complete('excess',11));
   assert.equal(l.pauseReason(),'ACTUAL_EXCEEDS_RESERVED');
-  await assert.rejects(()=>collectOnce(c,l,{adminKey:'fake',fetchImpl:(async()=>{throw new Error('unexpected request');}) as typeof fetch}),/Manual operator review required/);
+  // The collector still attempts its read-only poll, but the sticky
+  // accounting hold is preserved and admission stays closed.
+  await assert.rejects(()=>collectOnce(c,l,{adminKey:'fake',fetchImpl:(async()=>{throw new Error('unexpected request');}) as typeof fetch}),/unexpected request/);
   assert.equal(l.pauseReason(),'ACTUAL_EXCEEDS_RESERVED');
  }finally{l.close();}
 });

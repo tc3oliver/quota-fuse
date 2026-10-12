@@ -192,7 +192,10 @@ Fresh configs classify the 33 explicitly documented incentive model IDs
 into their respective groups, without a whitelist. Existing ledgers retain
 Premium-only accounting; **do not rewrite the policy fingerprint or migrate
 a running Ledger to the new `official_v1` mode**. Unknown models are not
-certified free. Read [the recovery runbook](runbook.md#reviewed-dispatched-unknown-at-utc-rollover)
+certified free. Other production services may share the org pool without
+passing QuotaFuse — record their load in `policy.externalSafetyReserve`,
+never throttle them, and never treat their usage as a collector fault.
+Read [the recovery runbook](runbook.md#reviewed-dispatched-unknown-at-utc-rollover)
 for strict terminal-response evidence requirements, a full UTC-day billing
 cooldown, and an audited dispatched-day UNKNOWN review. Do not automatically
 execute reconciliation or alter any real ledger without explicit approval.

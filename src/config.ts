@@ -25,6 +25,15 @@ export interface Config {
     manualCostsAuditedUntil: string | null; reconcileMaxAgeSeconds: number;
     /** Format-specific audit, distinct from general token incentive enrollment. */
     structuredTextVerified?: boolean; structuredTextAttestedUntil?: string | null;
+    /**
+     * Organization-aware shared-quota guard: conservative upper bound (tokens)
+     * per group for external-service consumption during official visibility
+     * delay + poll interval. External services may legally bypass the proxy;
+     * this reserve is added to effective_used on every admission decision.
+     * Missing or negative values fail closed; zero is only valid when the
+     * operator has independently bounded external traffic to ~zero.
+     */
+    externalSafetyReserve: Record<Group, number>;
   };
   quotas: Record<Group, { dailyTokens: number; models: string[] }>;
 }
@@ -67,6 +76,16 @@ export function validateConfig(c: Config): Config {
   }
   for (const feature of ['structuredTextVerified'] as const)
     if (c.policy[feature] !== undefined && typeof c.policy[feature] !== 'boolean') throw new Error('Invalid feature gate ' + feature);
+  // Organization-aware shared quota: per-group conservative external reserve.
+  // The org pool is shared with production services that bypass the proxy, so
+  // admission must always add this bound. Absent/invalid config fails closed.
+  if (!c.policy.externalSafetyReserve || typeof c.policy.externalSafetyReserve !== 'object')
+    throw new Error('policy.externalSafetyReserve with per-group conservative bounds is required');
+  for (const group of ['premium', 'economy'] as const) {
+    const r = (c.policy.externalSafetyReserve as Record<string, unknown>)[group];
+    if (!Number.isSafeInteger(r) || (r as number) < 0) throw new Error('Invalid externalSafetyReserve.' + group);
+    if ((r as number) > c.quotas[group].dailyTokens) throw new Error('externalSafetyReserve.' + group + ' exceeds group dailyTokens');
+  }
   return c;
 }
 export function loadConfig(path = process.env.QG_CONFIG ?? './config.json'): Config {

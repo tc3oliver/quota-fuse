@@ -100,8 +100,8 @@ test('reserve before preflight: quota too low means zero upstream calls',async()
   const seen:string[]=[],h=await harness(fake({},seen));
   try {
     const c=cfg();
-    h.l.admit(c,{key:'previous-local-work',hash:'previous',requestId:'previous',model:payload.model,group:'premium',day:new Date().toISOString().slice(0,10),reserve:849990});
-    h.l.complete('previous-local-work',849990);
+    h.l.admit(c,{key:'previous-local-work',hash:'previous',requestId:'previous',model:payload.model,group:'premium',day:new Date().toISOString().slice(0,10),reserve:839990});
+    h.l.complete('previous-local-work',839990);
     const r=await post(h.base);assert.equal(r.status,429);assert.equal(seen.length,0);
   }finally{await h.close();}
 });

@@ -24,11 +24,9 @@ test('two separate OS processes never oversubscribe final 50K', async () => {
   const database = join(dir, 'ledger.sqlite');
   try {
     const l = new Ledger(database); const c = cfg();
-    l.recordObservation(utcDay(), 'premium', 0);
-    l.recordObservation(utcDay(), 'economy', 0);
-    l.setPause(null);
-    l.admit(c, { key: 'existing-800k', hash: 'existing', requestId: 'existing',
-      model: c.quotas.premium.models[0], group: 'premium', day: utcDay(), reserve: 800_000 });
+    l.publishSharedUsage(utcDay(), { premium: 0, economy: 0 }, { premium: 0, economy: 0 });
+    l.admit(c, { key: 'existing-790k', hash: 'existing', requestId: 'existing',
+      model: c.quotas.premium.models[0], group: 'premium', day: utcDay(), reserve: 790_000 });
     l.close();
     const result = await Promise.all([runWorker(database, 'worker-one'), runWorker(database, 'worker-two')]);
     assert.deepEqual(result.sort(), [0, 9]);

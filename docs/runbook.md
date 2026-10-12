@@ -42,10 +42,25 @@ See [billing-validation.md](billing-validation.md) before enabling any actual Op
 1. Pause client traffic. Keep an external snapshot of the DB and record key/time/model from ledger; no prompt body is retained.
 2. Compare complete official usage pages and Dashboard Costs, including requests around UTC midnight.
 3. For incomplete or ambiguous outcomes, keep `UNKNOWN` and do not reissue the same operation. The only recovery command is **manual, audited preflight-only zero-billable-usage reconciliation**; it cannot release a generation-dispatched UNKNOWN.
-4. Stop and investigate if official high watermark regresses, official totals exceed verified baseline plus all locally accounted tokens, foreign-project traffic appears, unexpected actual tokens breach their reservation, or Data Sharing enrollment changes. Accounting invariant failures remain paused even after a successful collector poll; do not manually change guard_control without an audited recovery procedure. Config attestation expiration blocks usage.
+4. Stop and investigate if the official watermark regresses, per-project attribution breaks (unattributable rows, unknown models), official totals exceed any plausible bound, unexpected actual tokens breach their reservation, or Data Sharing enrollment changes. Ordinary external-service growth is **not** a fault — it only tightens admission. Accounting invariant failures remain paused even after a successful collector poll; do not manually change guard_control without an audited recovery procedure. Config attestation expiration blocks usage.
 5. To resume, document the independent evidence, use the documented offline `npm run reconcile` operation only for audited preflight-only UNKNOWN results; all other unknown outcomes require separate reviewed procedures, and re-run the collector. Production unpause is **not** represented as automatic recovery in this release.
 
-Changes to project, Data Sharing tier, model allowlists, safety caps, or token counter modes also fail closed via the persisted policy fingerprint. A persistent previous-day PENDING/UNKNOWN causes new-day requests to fail closed. Without an audited resolution there is no safe self-service bypass. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
+Changes to project, Data Sharing tier, model allowlists, safety caps, external reserves, or token counter modes also fail closed via the persisted policy fingerprint. A persistent previous-day PENDING/UNKNOWN causes new-day requests to fail closed. Without an audited resolution there is no safe self-service bypass. For a forgotten/compromised API key, revoke the upstream credential and proxy token directly at their source.
+
+## Cutover to organization-shared accounting
+
+Releases with shared-pool accounting change the policy fingerprint (new
+`externalSafetyReserve`). An existing history-bearing ledger will report
+`POLICY_CHANGED` at boot — this is fail-closed working as designed, not a
+bug. Do not edit the fingerprint, delete the database, or clear
+`guard_control`:
+
+1. Pick a fresh UTC day with no PENDING/UNKNOWN/MANUAL_REVIEW rows and no current-day observations (00:00 UTC = 08:00 Asia/Taipei). Stop Proxy and Collector.
+2. Back up `data/` (SQLite file plus WAL) and `config.json` to durable storage outside the repo.
+3. Add per-group `policy.externalSafetyReserve` bounds to `config.json` (peak external tokens/sec × visibility delay + 120s poll interval + margin).
+4. Point `server.storage` at a **new** SQLite file; keep the old file as the audit archive. Never delete it.
+5. Start the Collector first, verify fresh proxy AND external baselines for both groups via `/quota` (`official_external_usage` must be a number, not null), check Dashboard Usage/Costs, then start the Proxy.
+6. Drain or rotate client idempotency keys across the cutover: the new ledger cannot see the old ledger's keys.
 
 ## Reviewed DISPATCHED UNKNOWN at UTC rollover
 

@@ -99,9 +99,7 @@ async function startProxy(behavior: (n: number, url: string, body: any) => Respo
   mutateCfg?.(c);
   const ledger = baselinePremium === undefined ? verifiedLedger() : (() => {
     const l = new Ledger(':memory:');
-    l.recordObservation(utcDay(), 'premium', baselinePremium);
-    l.recordObservation(utcDay(), 'economy', 0);
-    l.setPause(null);
+    l.publishSharedUsage(utcDay(), { premium: baselinePremium, economy: 0 }, { premium: 0, economy: 0 });
     return l;
   })();
   const seen: Seen[] = [];

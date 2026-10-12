@@ -26,7 +26,11 @@
     "manualCostsAuditedUntil": null,
     "reconcileMaxAgeSeconds": 600,
     "structuredTextVerified": false,
-    "structuredTextAttestedUntil": null
+    "structuredTextAttestedUntil": null,
+    "externalSafetyReserve": {
+      "premium": 50000,
+      "economy": 200000
+    }
   },
   "quotas": {
     "premium": {

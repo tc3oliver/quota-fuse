@@ -30,11 +30,12 @@ test('slow healthy poll does not pause admissions or hold a SQLite write transac
     l.complete('concurrent-request',18);
     assert.equal(l.snapshot(c,today,'premium').local_settled,18);
     pending.resolve(new Response(JSON.stringify(page([row(c.quotas.premium.models[0],18)]))));
-    assert.deepEqual(await poll,{premium:18,economy:0});
+    assert.deepEqual(await poll,{proxy:{premium:18,economy:0},external:{premium:0,economy:0}});
     assert.equal(l.pauseReason(),null);
     assert.equal(l.observation(today,'premium')?.official_high_watermark,18);
     assert.equal(l.snapshot(c,today,'premium').local_settled,18);
-    assert.equal(l.snapshot(c,today,'premium').estimated_remaining,850000-18);
+    // effective = 0 external + max(18, 0+18) + 10000 reserve
+    assert.equal(l.snapshot(c,today,'premium').estimated_remaining,850000-18-10000);
   }finally{l.close();}
 });
 
@@ -68,13 +69,13 @@ test('operator pause introduced during in-flight network call survives successfu
   }finally{l.close();}
 });
 
-test('manual review at polling start prevents even fetching an Admin API page',async()=>{
+test('manual review at polling start still polls read-only but cannot clear the hold',async()=>{
   const l=verifiedLedger(),c=cfg();let count=0;
   try {
     l.setPause('MANUAL_REVIEW');
     await assert.rejects(()=>collectOnce(c,l,{adminKey:'mock-key',
-      fetchImpl:(async()=>{count++;throw new Error('not expected');}) as typeof fetch}),/Manual operator review required/);
-    assert.equal(count,0);
+      fetchImpl:(async()=>{count++;return new Response(JSON.stringify(page([])));}) as typeof fetch}),/Collector cannot replace an operator hold/);
+    assert.equal(count,1,'collector keeps polling read-only under manual hold');
     assert.equal(l.pauseReason(),'MANUAL_REVIEW');
   }finally{l.close();}
 });
@@ -82,29 +83,28 @@ test('manual review at polling start prevents even fetching an Admin API page',a
 test('atomic publication rolls back both groups and preserves sticky cause if second group regresses',async()=>{
   const c=cfg(),l=new Ledger(':memory:');
   try {
-    l.recordObservation(today,'premium',100);
-    l.recordObservation(today,'economy',100);
-    l.setPause(null);
+    l.publishSharedUsage(today,{premium:100,economy:100},{premium:0,economy:0});
     l.admit(c,{...args(l,c),reserve:50});
     await assert.rejects(()=>collectOnce(c,l,{adminKey:'mock-key',fetchImpl:stub([
       row(c.quotas.premium.models[0],110),
       row(c.quotas.economy.models[0],90)
-    ])}),/Official reading decreased/);
+    ])}),/reading decreased/);
     assert.equal(l.observation(today,'premium')?.official_high_watermark,100);
     assert.equal(l.observation(today,'economy')?.official_high_watermark,100);
     assert.equal(l.pauseReason(),'OFFICIAL_WATERMARK_REGRESSION');
-    await assert.rejects(()=>collectOnce(c,l,{adminKey:'mock-key',fetchImpl:stub([])}),/Manual operator review required/);
+    await assert.rejects(()=>collectOnce(c,l,{adminKey:'mock-key',fetchImpl:stub([])}),/Collector cannot replace an operator hold/);
     assert.equal(l.pauseReason(),'OFFICIAL_WATERMARK_REGRESSION');
   }finally{l.close();}
 });
 
-test('unaccounted official use is paused atomically and cannot publish either group',async()=>{
+test('proxy usage growth is absorbed by max(), never pauses either group',async()=>{
   const c=cfg(),l=verifiedLedger();
   try {
-    await assert.rejects(()=>collectOnce(c,l,{adminKey:'mock-key',
-      fetchImpl:stub([row(c.quotas.premium.models[0],1)])}),/Official reading exceeds/);
-    assert.equal(l.pauseReason(),'UNACCOUNTED_OFFICIAL_USAGE');
-    assert.equal(l.observation(today,'premium')?.official_high_watermark,0);
+    const result=await collectOnce(c,l,{adminKey:'mock-key',
+      fetchImpl:stub([row(c.quotas.premium.models[0],1)])});
+    assert.deepEqual(result,{proxy:{premium:1,economy:0},external:{premium:0,economy:0}});
+    assert.equal(l.pauseReason(),null);
+    assert.equal(l.observation(today,'premium')?.official_high_watermark,1);
     assert.equal(l.observation(today,'economy')?.official_high_watermark,0);
   }finally{l.close();}
 });
