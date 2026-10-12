@@ -40,6 +40,13 @@ export function readinessIssues(config: Config, ledger: Ledger, now = new Date()
   if (p.inputCounter !== 'responses_preflight') issues.push('PREFLIGHT_COUNTER_DISABLED');
   if (!p.preflightCostVerified) issues.push('PREFLIGHT_COST_UNVERIFIED');
   if (!attestedUntil(p.eligibilityAttestedUntil, now)) issues.push('ELIGIBILITY_ATTESTATION_MISSING');
+  else {
+    // Expiry stays a hard fail-closed gate (no programmatic enrollment check
+    // exists, and the date must never auto-extend). This warning exists only
+    // so a one-time re-confirmation never becomes a surprise outage.
+    const left = Date.parse(p.eligibilityAttestedUntil as string) - now.getTime();
+    if (Number.isFinite(left) && left <= 72 * 3600000) issues.push('ELIGIBILITY_ATTESTATION_EXPIRING');
+  }
   try {
     const pause = ledger.pauseReason();
     if (pause) issues.push('COLLECTOR_PAUSED:' + (pause.match(/^[A-Z_]{1,60}$/) ? pause : 'UNKNOWN'));

@@ -74,7 +74,7 @@ test('unrestricted models do not bypass unverified policy/attestation gates',()=
  }finally{l.close();}
 });
 
-test('collector reconciles unfiltered model usage to Premium, never treats it as free economy',async()=>{
+test('collector counts unlisted models bilaterally, never treats them as free economy',async()=>{
  const c=cfg();
  c.quotas.premium.models=[];c.quotas.economy.models=[];
  c.dataSharing.modelGroupAccounting='official_v1';
@@ -95,9 +95,14 @@ test('collector reconciles unfiltered model usage to Premium, never treats it as
  const ledger=new Ledger(':memory:');
  try{
    const result=await collectOnce(c,ledger,{fetchImpl,now,adminKey:'mock-admin-key'});
-   assert.deepEqual(result,{proxy:{premium:24,economy:16},external:{premium:0,economy:0},unknownModels:{}});
+   // Known economy model lands exactly once in economy; the unlisted model
+   // leaves per-group sums and is counted bilaterally via diagnostics.
+   assert.deepEqual(result,{proxy:{premium:0,economy:16},external:{premium:0,economy:0},
+     unknownModels:{'arbitrary-model-not-in-a-list':{group:'premium',tokens:24}}});
    assert.equal(requests,1);
    assert.equal(ledger.pauseReason(),null);
+   assert.equal(ledger.snapshot(c,'2026-10-11','economy').effective_used,16+24+100000);
+   assert.equal(ledger.snapshot(c,'2026-10-11','premium').effective_used,24+10000);
  }finally{ledger.close();}
 });
 

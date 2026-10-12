@@ -48,6 +48,7 @@ try {
       PREFLIGHT_COUNTER_DISABLED: 'Counter mode is disabled: review docs/billing-validation.md; never toggle without evidence.',
       PREFLIGHT_COST_UNVERIFIED: 'Preflight billing is not confirmed: review docs/billing-validation.md.',
       ELIGIBILITY_ATTESTATION_MISSING: 'Enrollment attestation missing or expired; use existing evidence where valid.',
+      ELIGIBILITY_ATTESTATION_EXPIRING: 'Enrollment attestation expires within 72h: re-confirm Data Sharing eligibility once (dashboard), then update policy.eligibilityAttestedUntil; no programmatic enrollment check exists.',
       LEDGER_UNAVAILABLE: 'SQLite ledger could not be read safely; see docs/runbook.md.'
     };
     const reasons = Array.isArray(diagnostic.reasons) ? diagnostic.reasons : [];

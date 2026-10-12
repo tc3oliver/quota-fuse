@@ -17,11 +17,11 @@ All automated tests use mock upstream responses; no live billing calls are made.
 | 12 Restart/busy/full/corrupt SQLite | PARTIAL | Restart recovery and corrupt-file denial tested; busy/full fault injection pending |
 | 13 Unknown model/tools/paid features | PASS | Strict request allowlist |
 | 14 Chat n>1 / unknown counter | PASS deny-only | Full Chat compatibility intentionally unavailable |
-| 15 Data Sharing eligibility revoked | PARTIAL | Manual attestation expiry; no auto API verification |
+| 15 Data Sharing eligibility revoked | PARTIAL | Manual attestation expiry (fail-closed) + 72h expiring warning; no auto API verification exists; layered: attestation + fingerprint-bound project/tier + usage monitoring + costs review |
 | 16 Auth/host/header/path restrictions | PARTIAL | Auth and path/header mock tests; hostile remote origin test pending |
 | 17 OMP fallback | DEMO ONLY | Provider contract; real OMP integration pending |
 | 18 Uncontrolled org traffic | PASS mock | External scope recorded, whitelist bypassed for external models, unknown models conservative + diagnostics, admission tightened; collection never stops; shared routing-project usage absorbed conservatively, no tripwire |
-| 18a External unknown models counted bilaterally | PASS mock | Formula `official_proxy + official_external_known + unknown_external + outstanding + settled + cross_day_carry + reserve`; known models never double-counted; safe-int overflow fails closed |
+| 18a Unknown models counted bilaterally in any project | PASS mock | Formula `official_proxy + official_external_known + unknown_external + outstanding + settled + cross_day_carry + reserve`; proxy-scope unknowns leave per-group sums for diagnostics; known models never double-counted; safe-int overflow fails closed |
 | 18b Shared routing project absorbed | PASS mock | Local settled/outstanding added in full on top of official usage, never netted; uncertain tokens double-deducted, never increasing capacity; legacy `PROXY_PROJECT_SHARED` pauses auto-clear on next trusted publish |
 | 18c Cross-day lifecycle carry | PASS mock | Only DISPATCHED-phase PENDING/UNKNOWN/MANUAL_REVIEW with `admitted_at ≥ day-00:00Z − 155000ms` carries into new-day same-group `effective_used`; PREFLIGHT-phase and window-expired rows carry nothing; admit/gate unblocked; history + idempotency preserved; optional dispatched-day review narrows only proven DISPATCHED UNKNOWN |
 | 18d Mixed-traffic no-undercount | PASS mock | Settled-unreflected + foreign same-project + official increment counted additively (counterexample: 100+100+100 → 200+reserve); reflected settled double-deducted (safe direction) |
