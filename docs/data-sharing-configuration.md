@@ -106,5 +106,8 @@ There is no auto-migration or history deletion. New installations default to
 Existing `config.json` files without `policy.externalSafetyReserve` are
 likewise **NOT** silently defaulted: admission requires an explicit
 per-group conservative bound for external-service consumption during stats
-delay. Add the bounds, then follow the [shared-accounting cutover](runbook.md#cutover-to-organization-shared-accounting)
-(new database file at a UTC boundary; old file retained as audit archive).
+delay. Add the bounds, then run the audited in-place `npm run
+accounting:shared-migration` (history fully preserved) — see
+[cutover runbook](runbook.md#cutover-to-organization-shared-accounting).
+Swapping database files is a last resort: a fresh ledger loses idempotency
+history and UNKNOWN/PENDING safety constraints.

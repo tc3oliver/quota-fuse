@@ -11,7 +11,7 @@ const config: Config = validateConfig({
   server:{host:'127.0.0.1',port:0,storage:':memory:',maxRequestBytes:65536,maxConcurrentRequests:2},
   upstream:{baseUrl:'https://api.openai.com/v1'},
   dataSharing:{projectId:'proj_demo-no-network',tier:'launch'},
-  policy:{mode:'FREE_ONLY',safetyPct:85,maxOutputTokens:256,accountMargin:10,inputCounter:'responses_preflight',preflightCostVerified:true,eligibilityAttestedUntil:tomorrow,exclusiveOrgTrafficAttestedUntil:tomorrow,manualCostsAuditedUntil:tomorrow,reconcileMaxAgeSeconds:600,externalSafetyReserve:{premium:50,economy:50}},
+  policy:{mode:'FREE_ONLY',safetyPct:85,maxOutputTokens:256,accountMargin:10,inputCounter:'responses_preflight',preflightCostVerified:true,eligibilityAttestedUntil:tomorrow,exclusiveOrgTrafficAttestedUntil:tomorrow,proxyProjectDedicatedAttestedUntil:tomorrow,manualCostsAuditedUntil:tomorrow,reconcileMaxAgeSeconds:600,externalSafetyReserve:{premium:50,economy:50}},
   quotas:{premium:{dailyTokens:1000,models:['demo-premium-2026-10-11']},economy:{dailyTokens:1000,models:[]}}
 });
 const ledger=new Ledger(':memory:');

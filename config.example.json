@@ -23,6 +23,7 @@
     "preflightCostVerified": false,
     "eligibilityAttestedUntil": null,
     "exclusiveOrgTrafficAttestedUntil": null,
+    "proxyProjectDedicatedAttestedUntil": null,
     "manualCostsAuditedUntil": null,
     "reconcileMaxAgeSeconds": 600,
     "structuredTextVerified": false,

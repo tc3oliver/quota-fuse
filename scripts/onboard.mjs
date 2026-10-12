@@ -136,7 +136,7 @@ try {
   const eligible = projectValid(c.dataSharing.projectId);
   const proxyKey = keyPresent('OPENAI_API_KEY','.env.proxy');
   const adminKey = keyPresent('OPENAI_ADMIN_KEY','.env.collector');
-  const future = ['eligibilityAttestedUntil','manualCostsAuditedUntil']
+  const future = ['eligibilityAttestedUntil','proxyProjectDedicatedAttestedUntil','manualCostsAuditedUntil']
     .every(k => typeof c.policy[k] === 'string' && Date.parse(c.policy[k]) > Date.now());
   console.log('\nQuotaFuse setup (' + (doctor ? 'read-only' : 'offline') + ')');
   console.log('  Data Sharing scope: All projects OR Selected projects; this must already cover the routing Project.');
@@ -163,6 +163,7 @@ try {
   if (!c.policy.preflightCostVerified) pending.push('PREFLIGHT_COST_UNVERIFIED — do not enable without evidence');
   for (const [key,description] of [
     ['eligibilityAttestedUntil','ELIGIBILITY_ATTESTATION_MISSING'],
+    ['proxyProjectDedicatedAttestedUntil','PROXY_PROJECT_DEDICATION_UNVERIFIED'],
     ['manualCostsAuditedUntil','COST_AUDIT_UNVERIFIED']]) {
     if (!c.policy[key] || Date.parse(c.policy[key]) <= Date.now()) pending.push(description + ' — use existing evidence if still valid');
   }

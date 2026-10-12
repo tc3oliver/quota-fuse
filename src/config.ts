@@ -23,6 +23,17 @@ export interface Config {
     inputCounter: 'reject' | 'responses_preflight'; preflightCostVerified: boolean;
     eligibilityAttestedUntil: string | null; exclusiveOrgTrafficAttestedUntil: string | null;
     manualCostsAuditedUntil: string | null; reconcileMaxAgeSeconds: number;
+    /**
+     * Proxy-project dedication attestation (operator-verified, expiring).
+     * The routing project must be used ONLY by QuotaFuse: no other service,
+     * key, or workspace may send traffic under this project ID. The
+     * max()-dedup in effective_used is only sound under this premise.
+     * Scoped to the proxy project ONLY — other org projects may legally
+     * share the pool. Null or expired fails closed. Evidence (Dashboard
+     * activity review + ticket) is kept out-of-repo. This intentionally does
+     * NOT restore the old org-wide no-bypass requirement.
+     */
+    proxyProjectDedicatedAttestedUntil: string | null;
     /** Format-specific audit, distinct from general token incentive enrollment. */
     structuredTextVerified?: boolean; structuredTextAttestedUntil?: string | null;
     /**
@@ -70,7 +81,7 @@ export function validateConfig(c: Config): Config {
       seen.add(model);
     }
   }
-  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil', 'structuredTextAttestedUntil'] as const) {
+  for (const prop of ['eligibilityAttestedUntil', 'exclusiveOrgTrafficAttestedUntil', 'manualCostsAuditedUntil', 'structuredTextAttestedUntil', 'proxyProjectDedicatedAttestedUntil'] as const) {
     const val = c.policy[prop];
     if (val !== null && val !== undefined && (typeof val !== 'string' || !Number.isFinite(Date.parse(val)))) throw new Error('Invalid attestation timestamp: ' + prop);
   }

@@ -20,7 +20,7 @@ All automated tests use mock upstream responses; no live billing calls are made.
 | 15 Data Sharing eligibility revoked | PARTIAL | Manual attestation expiry; no auto API verification |
 | 16 Auth/host/header/path restrictions | PARTIAL | Auth and path/header mock tests; hostile remote origin test pending |
 | 17 OMP fallback | DEMO ONLY | Provider contract; real OMP integration pending |
-| 18 Uncontrolled org traffic | PASS mock | External scope recorded, admission tightened; collection never stops |
+| 18 Uncontrolled org traffic | PASS mock | External scope recorded, whitelist bypassed for external models, unknown models conservative + diagnostics, admission tightened; collection never stops; in-project mixing trips sticky lock |
 | 19 Billing dashboard reconciliation | NOT RUN | Needs real audited eligible project, human verification |
 | 20 Fault tracking + recovery | PARTIAL | Fail closed/UNKNOWN; reviewed manual recovery SOP only |
 
@@ -39,7 +39,11 @@ independence with UNKNOWN retention, restart/migration/legacy
 compatibility, `/quota` null-on-untrusted shape, saturation denial, and the
 unchanged FREE_ONLY/OMP error contract are covered by
 `tests/unit/shared-quota.test.ts` and
-`tests/fault-injection/shared-collector.test.ts` (mock only).
+`tests/fault-injection/shared-collector.test.ts` (mock only). Project
+dedication gating, the `PROXY_PROJECT_SHARED` tripwire, external
+unknown-model diagnostics, delayed partial reflection, and the audited
+in-place shared-accounting migration (history/idempotency preserving) are
+covered by `tests/unit/dedication-migration.test.ts`.
 
 ### Incomplete generation accounting
 

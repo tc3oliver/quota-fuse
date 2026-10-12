@@ -32,7 +32,12 @@ const collectorRecoverable = new Set<string | null>([
 ]);
 const collectorInvariantFailures = new Set([
   'ACTUAL_EXCEEDS_RESERVED',
-  'OFFICIAL_WATERMARK_REGRESSION', 'ANCHOR_UNVERIFIED'
+  'OFFICIAL_WATERMARK_REGRESSION', 'ANCHOR_UNVERIFIED',
+  // PROXY_PROJECT_SHARED: proxy-scope official usage above the local upper
+  // bound proves foreign traffic inside the DEDICATED routing project (or a
+  // broken baseline). Unlike org-wide external traffic, this invalidates the
+  // max()-dedup premise and stays sticky pending human review.
+  'PROXY_PROJECT_SHARED'
   // NOTE: UNACCOUNTED_OFFICIAL_USAGE is intentionally REMOVED. The org pool is
   // shared with production services that bypass the proxy; official totals
   // above the local ledger are expected, not anomalous.
@@ -65,6 +70,10 @@ export class Ledger {
     if (!columns('observations').includes('official_external')) this.db.exec('ALTER TABLE observations ADD COLUMN official_external INTEGER CHECK(official_external >= 0)');
     if (!columns('observations').includes('last_poll_attempt')) this.db.exec('ALTER TABLE observations ADD COLUMN last_poll_attempt TEXT');
     if (!columns('observations').includes('last_poll_error')) this.db.exec('ALTER TABLE observations ADD COLUMN last_poll_error TEXT');
+    // 006: external unknown-model diagnostics. Table-based (IF NOT EXISTS)
+    // so reopening a migrated database is a no-op. Canonical SQL is kept in
+    // migrations/006_external_unknown_models.sql.
+    this.db.exec(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../migrations/006_external_unknown_models.sql'), 'utf8'));
     this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA synchronous = FULL;');
     if (options.recoverPending !== false) this.recoverPending();
   }
@@ -102,6 +111,50 @@ export class Ledger {
   verifyPolicy(config: Config): void {
     const old = this.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as any;
     if (!old || old.sha256 !== this.policyHash(config)) throw new LedgerError('POLICY_CHANGED', 'Uninitialized or changed policy; operator reconciliation required');
+  }
+  /** Pre-shared-accounting fingerprint (no externalSafetyReserve). Used ONLY
+   * by the audited in-place migration to prove the stored policy differs
+   * from the current config in exactly the reserve addition — any other
+   * drift still fails closed via the normal POLICY_CHANGED path. */
+  legacyPolicyHash(config: Config): string {
+    const canonical = JSON.stringify({ projectId: config.dataSharing.projectId, dataSharingTier: config.dataSharing.tier,
+      groups: config.quotas, safetyPct: config.policy.safetyPct,
+      outputCap: config.policy.maxOutputTokens, accountMargin: config.policy.accountMargin,
+      counter: config.policy.inputCounter,
+      structuredTextVerified: config.policy.structuredTextVerified === true,
+      localAgentTools: true,
+      ...(config.dataSharing.modelGroupAccounting === 'official_v1'
+        ? {modelGroupAccounting:'official_v1'} : {}) });
+    return createHash('sha256').update(canonical).digest('hex');
+  }
+  /**
+   * Audited in-place adoption of shared-org accounting on an EXISTING ledger.
+   * Keeps every reservation (including PENDING/UNKNOWN), every observation,
+   * every idempotency key and the pause state untouched; only the policy
+   * fingerprint advances, with an immutable audit row. Refuses unless the
+   * stored fingerprint matches the legacy (pre-reserve) hash of the CURRENT
+   * config, proving no other policy field drifted. Old rows stay fail-closed
+   * (external NULL) until the collector establishes trusted shared baselines.
+   * Caller must hold both proxy and collector instance locks. Never touches
+   * guard_control. Prefer this over swapping database files: a fresh file
+   * loses idempotency history and UNKNOWN/PENDING safety constraints.
+   */
+  migrateSharedAccounting(config: Config, operator: string, evidence: string, now = new Date()): void {
+    if (!/^[a-zA-Z0-9_.@-]{3,100}$/.test(operator) ||
+        evidence.trim().length < 80 || evidence.length > 4096 ||
+        !Number.isFinite(now.getTime()) || now.getTime() > Date.now() + 5000)
+      throw new LedgerError('INVALID_EVIDENCE', 'Named operator and detailed >=80-char evidence required');
+    this.tx(() => {
+      const record = this.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as {sha256:string}|undefined;
+      const legacy = this.legacyPolicyHash(config);
+      const next = this.policyHash(config);
+      if (!record || record.sha256 !== legacy || legacy === next)
+        throw new LedgerError('POLICY_CHANGED', 'Stored policy does not match the pre-shared-accounting baseline; unrelated drift requires separate review');
+      this.db.prepare('UPDATE policy_fingerprint SET sha256=? WHERE id=1').run(next);
+      this.db.prepare(`INSERT INTO accounting_migration_audit
+        (operator,evidence,effective_utc_day,from_fingerprint,to_fingerprint,created_at)
+        VALUES(?,?,?,?,?,?)`).run(operator, evidence, utcDay(now), record.sha256, next, now.toISOString());
+    });
   }
   assertPolicy(config: Config): void {
     const hash = this.policyHash(config);
@@ -195,11 +248,23 @@ export class Ledger {
       if (present.n) throw new LedgerError('ANCHOR_UNVERIFIED', 'Cannot initialize a baseline after local requests were admitted');
     }
     if (at.getTime() > Date.now() + 5000) throw new LedgerError('CLOCK_SKEW', 'Future collector checkpoint');
-    // Shared-org design: external-service consumption is legitimate. Official
-    // proxy totals above (baseline + local upper bound) are NOT an invariant
-    // failure — the proxy project scope is the dedup boundary, and delayed
-    // official aggregation may reflect completions late. The snapshot formula
-    // below handles both cases conservatively with max().
+    // Proxy-project dedication tripwire (scoped, NOT org-wide): under a
+    // dedicated routing project, proxy-scope official usage can only reflect
+    // locally committed tokens (possibly delayed), so it can never exceed
+    // baseline + local upper bound. Overflow proves foreign traffic inside
+    // the proxy project (or a broken baseline) and invalidates max()-dedup.
+    // External-scope growth is exempt — it is legitimate shared-pool use.
+    if (old) {
+      const { settled, outstanding } = this.usage(day, group);
+      const localUpper = (old.anchor_tokens as number) + settled + outstanding;
+      if (!Number.isSafeInteger(localUpper))
+        throw new LedgerError('INVALID_USAGE', 'Usage overflow');
+      if (proxyTokens > localUpper)
+        throw new LedgerError('PROXY_PROJECT_SHARED', 'Proxy-scope official usage exceeds dedicated-project upper bound');
+    }
+    // Delayed official aggregation may reflect proxy completions late; the
+    // snapshot formula handles that conservatively with max(). Only
+    // above-upper-bound proxy readings trip; external scope never does.
   }
   private saveSharedObservation(day: string, group: Group, proxyTokens: number, externalTokens: number, at: Date): void {
     const iso = at.toISOString();
@@ -233,8 +298,11 @@ export class Ledger {
   /** Publish a complete org-wide observation for both groups atomically.
    * Proxy and external scopes are validated and written in ONE transaction so
    * admission never observes a half-updated pair. A recoverable collector
-   * pause is cleared; sticky operator/invariant holds are preserved. */
-  publishSharedUsage(day: string, proxy: Record<Group,number>, external: Record<Group,number>, at = new Date()): void {
+   * pause is cleared; sticky operator/invariant holds are preserved.
+   * Unknown external models (outside the reviewed official map) may be
+   * attached for diagnostics; their tokens are already inside `external`
+   * (conservative premium accounting) and are recorded, never ignored. */
+  publishSharedUsage(day: string, proxy: Record<Group,number>, external: Record<Group,number>, at = new Date(), unknownModels?: Record<string, { group: Group; tokens: number }>): void {
     let validationFailure: LedgerError | null = null;
     this.tx(() => {
       if (!collectorRecoverable.has(this.pauseReason()))
@@ -253,9 +321,31 @@ export class Ledger {
       }
       for (const group of ['premium','economy'] as const)
         this.saveSharedObservation(day, group, proxy[group], external[group], at);
+      if (unknownModels) this.saveUnknownModels(day, unknownModels, at);
       this.db.prepare('UPDATE guard_control SET paused_reason=NULL WHERE id=1').run();
     });
     if (validationFailure) throw validationFailure;
+  }
+  private saveUnknownModels(day: string, models: Record<string, { group: Group; tokens: number }>, at: Date): void {
+    const iso = at.toISOString();
+    for (const [model, info] of Object.entries(models)) {
+      if (typeof model !== 'string' || model.length === 0 || model.length > 128) continue;
+      if (!Number.isSafeInteger(info.tokens) || info.tokens < 0) continue;
+      if (info.group !== 'premium' && info.group !== 'economy') continue;
+      this.db.prepare(`INSERT INTO external_unknown_models(utc_day,model,group_name,tokens,first_seen,last_seen)
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(utc_day,model) DO UPDATE SET tokens=excluded.tokens,last_seen=excluded.last_seen`)
+        .run(day, model, info.group, info.tokens, iso, iso);
+    }
+  }
+  unknownModels(day: string): Array<{ model: string; group: Group; tokens: number }> {
+    try {
+      return this.db.prepare('SELECT model, group_name AS grp, tokens FROM external_unknown_models WHERE utc_day=? ORDER BY tokens DESC')
+        .all(day).map((r: any) => ({ model: r.model, group: r.grp as Group, tokens: Number(r.tokens) })) as any;
+    } catch {
+      // Pre-006 read-only opens never recorded diagnostics: none exist.
+      return [];
+    }
   }
   /** Legacy compat: proxy-only publish. External scope is carried over when
    * known, otherwise the row stays fail-closed (external unknown). Prefer
@@ -364,6 +454,10 @@ export class Ledger {
       last_poll_attempt: (obs as any)?.last_poll_attempt ?? null,
       observation_age_seconds: observationAge,
       state, pause_reason: this.pauseReason(),
+      // External models outside the reviewed official map, conservatively
+      // counted above. Review group mapping and free eligibility; tokens are
+      // never ignored. Day-scoped diagnostics only, not an admission input.
+      external_unknown_models: this.unknownModels(day),
       // Legacy compat fields (do not use for new capacity math).
       admitted_reserved: outstanding, local_settled: settled, official_observed: obs?.official_high_watermark ?? null,
       baseline_observed: obs?.anchor_tokens ?? null,

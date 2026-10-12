@@ -137,23 +137,28 @@ test('reserve config bounds are enforced and fingerprinted', () => {
   } finally { l.close(); }
 });
 
-// 14. Same-project foreign usage is conservatively absorbed, not deduped away.
-test('usage inside the proxy project scope still tightens admission', () => {
+// 14. Same-project foreign usage is NOT deduped away: it trips the
+// dedication tripwire instead of silently undercounting. Underestimate
+// counterexample: 20 local vs 100000 official in the routing project can
+// only be foreign traffic (dedicated project), so max() must not launder it.
+test('foreign usage inside the proxy project trips instead of undercounting', () => {
   const l = verifiedLedger(), c = cfg();
-  // Even if another service reused the proxy project, its tokens land in the
-  // proxy watermark and can only raise effective_used via max(). No precise
-  // dedup is claimed, so sharing can never loosen admission.
   admit(l, 'mine', 20000);
-  l.publishSharedUsage(day, { premium: 100000, economy: 0 }, { premium: 0, economy: 0 });
-  const snap = l.snapshot(c, day, P);
-  assert.equal(snap.effective_used, 100000 + 10000);
+  assert.throws(() => l.publishSharedUsage(day, { premium: 100000, economy: 0 }, { premium: 0, economy: 0 }),
+    (e: any) => e.code === 'PROXY_PROJECT_SHARED');
+  assert.equal(l.pauseReason(), 'PROXY_PROJECT_SHARED');
+  assert.equal(l.observation(day, 'premium')?.official_high_watermark, 0);
+  assert.throws(() => admit(l, 'after', 10), (e: any) => e.code === 'FREE_QUOTA_UNVERIFIED');
   l.close();
 });
 
 // 15. UTC midnight starts an independent day; Taipei 08:00 is the same instant.
 test('new UTC day starts independent observations', () => {
   const l = verifiedLedger(), c = cfg();
+  l.admit(c, { key: 'd1', hash: 'd1', requestId: 'd1', model: c.quotas.premium.models[0], group: P, day, reserve: 9000 });
+  l.complete('d1', 9000);
   l.publishSharedUsage(day, { premium: 9000, economy: 0 }, { premium: 1000, economy: 0 });
+  assert.equal(l.snapshot(c, day, P).effective_used, 1000 + 9000 + 10000);
   const tomorrow = '2999-01-02';
   assert.equal(nextReset('2999-01-01'), '2999-01-02T00:00:00.000Z');
   // Yesterday 16:00 UTC == Taipei midnight; UTC 00:00 == Taipei 08:00.

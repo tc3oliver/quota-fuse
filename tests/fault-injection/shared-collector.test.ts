@@ -14,31 +14,41 @@ function bucket(results: any[]) {
 }
 const proxyRow = (c: any, n: number) => ({ model: c.quotas.premium.models[0], project_id: 'proj_test', input_tokens: n, output_tokens: n });
 const extRow = (c: any, n: number) => ({ model: c.quotas.premium.models[0], project_id: 'proj_external', input_tokens: n, output_tokens: n });
+// Officially-known economy model deliberately ABSENT from the proxy whitelist:
+// external services choose their own models.
+const extKnownEconomy = { model: 'gpt-4.1-mini-2025-04-14', project_id: 'proj_external', input_tokens: 30, output_tokens: 20 };
 
 // 1. Mixed proxy + external traffic in one cycle splits scopes, no failure.
+// The external model is outside the proxy whitelist: the whitelist is an
+// admission filter, never an org-usage classifier.
 test('mixed org pages split proxy and external scopes without failure', async () => {
   const c = cfg(), l = new Ledger(':memory:');
   const first = { object: 'page', data: [{ object: 'bucket', start_time: utcStart, end_time: end, results: [proxyRow(c, 10)] }], has_more: true, next_page: 'p2' };
-  const second = bucket([extRow(c, 25)]);
+  const second = bucket([extKnownEconomy]);
   let calls = 0;
   const pages = [first, second];
   const fetchImpl = (async () => new Response(JSON.stringify(pages[calls++]), { status: 200 })) as typeof fetch;
   try {
     const result = await collectOnce(c, l, { fetchImpl, adminKey: 'fake' });
-    assert.deepEqual(result, { proxy: { premium: 20, economy: 0 }, external: { premium: 50, economy: 0 } });
+    assert.deepEqual(result, { proxy: { premium: 20, economy: 0 }, external: { premium: 0, economy: 50 }, unknownModels: {} });
     assert.equal(l.isPaused(), false);
-    const snap = l.snapshot(c, day, 'premium');
-    assert.equal(snap.official_proxy_usage, 20);
-    assert.equal(snap.official_external_usage, 50);
-    assert.equal(snap.official_org_usage, 70);
-    // effective = 50 + max(20, 20+0) + 10000
-    assert.equal(snap.effective_used, 70 + 10000);
+    const prem = l.snapshot(c, day, 'premium');
+    assert.equal(prem.official_proxy_usage, 20);
+    assert.equal(prem.official_external_usage, 0);
+    const eco = l.snapshot(c, day, 'economy');
+    assert.equal(eco.official_external_usage, 50);
+    assert.equal(eco.official_org_usage, 50);
+    // economy effective = 50 + max(0, 0+0) + 100000
+    assert.equal(eco.effective_used, 50 + 100000);
   } finally { l.close(); }
 });
 
 // 10. API failure preserves watermarks and the next cycle still polls.
 test('api failure preserves checkpoint and never blocks the next poll', async () => {
   const c = cfg(), l = verifiedLedger();
+  // Cover the checkpoint with local settlement (dedicated project).
+  l.admit(c, { key: 'cover', hash: 'cover', requestId: 'cover', model: c.quotas.premium.models[0], group: 'premium', day, reserve: 100 });
+  l.complete('cover', 100);
   l.publishSharedUsage(day, { premium: 100, economy: 0 }, { premium: 50, economy: 0 });
   let calls = 0;
   const retryPage = bucket([proxyRow(c, 50), extRow(c, 25)]);
@@ -55,6 +65,7 @@ test('api failure preserves checkpoint and never blocks the next poll', async ()
     const result = await collectOnce(c, l, { fetchImpl: flaky, adminKey: 'fake' });
     assert.equal(calls, 2);
     assert.equal(result.proxy.premium, 100);
+    assert.equal(result.external.premium, 50);
     assert.equal(l.isPaused(), false);
   } finally { l.close(); }
 });
@@ -84,9 +95,11 @@ test('manual hold is never auto-cleared by collector success', async () => {
 // 13. Regression, missing bucket, unknown model, unattributable rows refuse safely.
 test('regression across either scope pauses without overwriting', async () => {
   const c = cfg(), l = verifiedLedger();
+  l.admit(c, { key: 'cover', hash: 'cover', requestId: 'cover', model: c.quotas.premium.models[0], group: 'premium', day, reserve: 100 });
+  l.complete('cover', 100);
   l.publishSharedUsage(day, { premium: 100, economy: 0 }, { premium: 80, economy: 0 });
-  const fetchImpl = (async () => new Response(JSON.stringify(bucket([{ ...extRow(c, 10), input_tokens: 10, output_tokens: 10 }])), { status: 200 })) as typeof fetch;
-  // external 20 < 80 -> regression
+  const fetchImpl = (async () => new Response(JSON.stringify(bucket([proxyRow(c, 50), { ...extRow(c, 10), input_tokens: 10, output_tokens: 10 }])), { status: 200 })) as typeof fetch;
+  // proxy 100 steady, external 20 < 80 -> external regression
   try {
     await assert.rejects(() => collectOnce(c, l, { fetchImpl, adminKey: 'fake' }), /decreased/);
     assert.equal(l.pauseReason(), 'OFFICIAL_WATERMARK_REGRESSION');

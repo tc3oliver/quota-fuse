@@ -107,8 +107,8 @@ npm run demo
 
 **Technical preview:** QuotaFuse cannot atomically query the official remaining
 complimentary balance. It fails closed without independently confirmed
-enrollment, input-counter billing behavior and collector health; there is
-no automatic paid OpenAI fallback. The collector polls organization usage
+enrollment, proxy-project dedication, input-counter billing behavior and
+collector health; there is no automatic paid OpenAI fallback. The collector polls organization usage
 every 120s, but official statistics may lag, so admission adds a configured
 `externalSafetyReserve` per group and `estimated_remaining` is a
 conservative local admission estimate — never an official free-balance
@@ -142,7 +142,11 @@ official external-scope usage, and local committed reservations, and admits only
 Configure `policy.externalSafetyReserve` per group as the conservative
 upper bound for external consumption during official visibility delay plus
 the 120s poll interval. QuotaFuse only gates its own admissions; it never
-limits, stops, or modifies external services. Upgrading from a
-pre-shared-accounting release changes the policy fingerprint: cut over to a
-new database file at a UTC boundary (back up the old file as audit
-archive) — see the [runbook](docs/runbook.md).
+limits, stops, or modifies external services. Use a **dedicated routing
+project used by nothing but QuotaFuse** — the usage-dedup math is only
+sound under that premise, enforced by an expiring
+`proxyProjectDedicatedAttestedUntil` attestation plus a runtime tripwire.
+Upgrading from a pre-shared-accounting release changes the policy
+fingerprint: run the audited in-place migration
+(`npm run accounting:shared-migration`, history fully preserved) — see the
+[runbook](docs/runbook.md).

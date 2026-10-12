@@ -30,7 +30,7 @@ test('slow healthy poll does not pause admissions or hold a SQLite write transac
     l.complete('concurrent-request',18);
     assert.equal(l.snapshot(c,today,'premium').local_settled,18);
     pending.resolve(new Response(JSON.stringify(page([row(c.quotas.premium.models[0],18)]))));
-    assert.deepEqual(await poll,{proxy:{premium:18,economy:0},external:{premium:0,economy:0}});
+    assert.deepEqual(await poll,{proxy:{premium:18,economy:0},external:{premium:0,economy:0},unknownModels:{}});
     assert.equal(l.pauseReason(),null);
     assert.equal(l.observation(today,'premium')?.official_high_watermark,18);
     assert.equal(l.snapshot(c,today,'premium').local_settled,18);
@@ -97,12 +97,14 @@ test('atomic publication rolls back both groups and preserves sticky cause if se
   }finally{l.close();}
 });
 
-test('proxy usage growth is absorbed by max(), never pauses either group',async()=>{
+test('proxy usage within committed bounds absorbs via max(), never pauses',async()=>{
   const c=cfg(),l=verifiedLedger();
   try {
+    l.admit(c,{key:'local-1',hash:'h1',requestId:'r1',model:c.quotas.premium.models[0],group:'premium',day:today,reserve:50});
+    l.complete('local-1',1);
     const result=await collectOnce(c,l,{adminKey:'mock-key',
       fetchImpl:stub([row(c.quotas.premium.models[0],1)])});
-    assert.deepEqual(result,{proxy:{premium:1,economy:0},external:{premium:0,economy:0}});
+    assert.deepEqual(result,{proxy:{premium:1,economy:0},external:{premium:0,economy:0},unknownModels:{}});
     assert.equal(l.pauseReason(),null);
     assert.equal(l.observation(today,'premium')?.official_high_watermark,1);
     assert.equal(l.observation(today,'economy')?.official_high_watermark,0);

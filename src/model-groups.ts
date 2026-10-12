@@ -56,3 +56,11 @@ export function groupForUnrestrictedModel(model: string): Group {
   // smaller token bucket; the latter can still incur actual API charges.
   return 'premium';
 }
+
+/** Whether a model ID is in the reviewed official group map at all.
+ * External-scope classification uses this to separate known-group models
+ * (trusted group mapping) from unknown models (conservative premium
+ * accounting plus explicit diagnostics, never silent ignore). */
+export function isKnownModel(model: string): boolean {
+  return premium.has(model) || economy.has(model);
+}

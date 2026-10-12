@@ -19,7 +19,7 @@ npm run onboard
 
 Edit `config.json`:
 
-- `dataSharing.projectId`: choose **any existing** API Project ID (`proj_...`). The Data Sharing opt-in can be **All projects**; no dedicated Project is needed to qualify.
+- `dataSharing.projectId`: choose **any existing** API Project ID (`proj_...`) and dedicate it to QuotaFuse — no other service, key, or workspace may use it. The Data Sharing opt-in can be **All projects**; no dedicated Project is needed to qualify, but the routing project itself must be exclusive. Attest with `policy.proxyProjectDedicatedAttestedUntil` after a Dashboard activity review.
 - `dataSharing.tier`: confirmed organization tier: `build`, `launch`, or `grow`.
 - `quotas.premium.dailyTokens` and `quotas.economy.dailyTokens`: no greater than your tier's daily token allowances. All eligible models in a group share the same cap.
 - `quotas.*.models`: **both empty by default**, meaning no model-ID whitelist. Unknown IDs are conservatively charged against the smaller Premium token budget, but **may still incur actual charges** if ineligible for Data Sharing. A whitelist is optional: `npm run onboard -- --premium=gpt-6-sol --economy=gpt-5.6-terra` before ledger initialization.
@@ -87,7 +87,7 @@ To stop, use Ctrl+C in each service terminal and preserve `data/`.
 
 ## 5. Confirm before sending any real requests
 
-Review the [billing validation checklist](billing-validation.md), including your existing All projects or selected-project enrollment, current tier, exact model eligibility, input counter behavior, unexpected Costs, external-service consumption bounds and expiring operator attestations.
+Review the [billing validation checklist](billing-validation.md), including your existing All projects or selected-project enrollment, current tier, exact model eligibility, routing-project dedication evidence, input counter behavior, unexpected Costs, external-service consumption bounds and expiring operator attestations.
 
 **Do not enable live inference based on a successful install or collector poll alone.** OpenAI Usage API is delayed and does not confirm atomically remaining complimentary capacity.
 

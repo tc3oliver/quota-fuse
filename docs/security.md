@@ -16,7 +16,8 @@
 | Upstream ambiguous response / stream disconnect / restart | Keep reservation `UNKNOWN` forever until explicitly reviewed; never auto replay |
 | Admin API stale or unavailable | Persist pause on collector error; checkpoint age gate, exclusive collector lock |
 | Watermark goes backwards | Reject regression and pause collector |
-| Bypass by other org projects | External scope recorded + `externalSafetyReserve` bound; collector never stops on bypass traffic; cannot prevent bypass at OpenAI |
+| Bypass by other org projects | External scope recorded + `externalSafetyReserve` bound; admission whitelist never applied to external models; collector never stops on bypass traffic; cannot prevent bypass at OpenAI |
+| Foreign traffic inside the routing project | Dedicated-project attestation gate + sticky `PROXY_PROJECT_SHARED` tripwire; fail closed pending human review |
 | Prompt or output contains private data | All clients MUST attest `public`; **no reliable automated sensitive-data detection in v0.1** |
 | Header spoofing / arbitrary URL SSRF | Fixed upstream origin, no redirects, server-generated auth headers, local host binding |
 | Hostile local process | Bearer token; local network access alone is not authorization; operating-system file permissions and secret storage remain operator tasks |
