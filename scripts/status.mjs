@@ -59,7 +59,9 @@ try {
       if (typeof reason !== 'string') continue;
       const prefix = reason.split(':')[0];
       const detail = prefix === 'COLLECTOR_PAUSED'
-        ? 'Collector is paused (' + (reason.split(':')[1] || 'UNVERIFIED') + '). External bypass traffic never pauses collection; check Admin key, usage API, and collector logs.'
+        ? ((reason.split(':')[1] || 'UNVERIFIED') === 'PROXY_PROJECT_SHARED'
+          ? 'Collector is paused (PROXY_PROJECT_SHARED). Check both project sharing (foreign traffic in the routing project) and /responses/input_tokens preflight attribution (unverified); see docs/runbook.md.'
+          : 'Collector is paused (' + (reason.split(':')[1] || 'UNVERIFIED') + '). External bypass traffic never pauses collection; check Admin key, usage API, and collector logs.')
         : prefix === 'USAGE_BASELINE_UNVERIFIED'
         ? 'Fresh official usage baseline missing for ' + (reason.split(':')[1] || 'group') + '; start and check the collector.'
         : (help[reason] || 'Review docs/runbook.md for this admission issue.');

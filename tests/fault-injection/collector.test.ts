@@ -31,11 +31,14 @@ test('foreign-project usage is recorded as external scope, not a collector failu
   const l=new Ledger(':memory:'),c=cfg(),one=page([row(c.quotas.premium.models[0],100)]);one.data[0].results[0].project_id='another-project';
   const fetchImpl=(async()=>new Response(JSON.stringify(one))) as typeof fetch;
   try {const result=await collectOnce(c,l,{fetchImpl,adminKey:'fake'});
-    // The whitelisted-but-officially-unmapped test model is conservatively
-    // counted in premium external scope with explicit diagnostics.
-    assert.deepEqual(result,{proxy:{premium:0,economy:0},external:{premium:200,economy:0},unknownModels:{'gpt-test-2026-10-11':{group:'premium',tokens:200}}});
+    // The whitelisted-but-officially-unmapped test model is group-unconfirmed:
+    // excluded from per-group external sums, counted via unknown diagnostics.
+    assert.deepEqual(result,{proxy:{premium:0,economy:0},external:{premium:0,economy:0},unknownModels:{'gpt-test-2026-10-11':{group:'premium',tokens:200}}});
     assert.equal(l.isPaused(),false);
-    assert.equal(l.observation(new Date().toISOString().slice(0,10),'premium')?.official_external,200);
+    assert.equal(l.observation(new Date().toISOString().slice(0,10),'premium')?.official_external,0);
+    // ...yet both groups' conservative estimates absorb it (see unknown-economy tests).
+    assert.equal(l.snapshot(c,new Date().toISOString().slice(0,10),'premium').effective_used,200+10000);
+    assert.equal(l.snapshot(c,new Date().toISOString().slice(0,10),'economy').effective_used,200+100000);
   }finally{l.close();}
 });
 test('usage endpoint failure pauses immediately',async()=>{
@@ -98,7 +101,8 @@ test('proxy official above local upper bound trips sticky project-sharing pause'
   const l2=new Ledger(':memory:');
   try {
     const r=await collectOnce(c,l2,{fetchImpl:(async()=>new Response(JSON.stringify(ext))) as typeof fetch,adminKey:'test-admin'});
-    assert.equal(r.external.premium,200);
+    assert.deepEqual(r.external,{premium:0,economy:0});
+    assert.deepEqual(r.unknownModels,{'gpt-test-2026-10-11':{group:'premium',tokens:200}});
     assert.equal(l2.isPaused(),false);
   } finally { l2.close(); }
  }finally{l.close();}

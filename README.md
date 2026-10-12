@@ -135,17 +135,26 @@ The org pool is shared with production services that bypass the proxy.
 Per UTC day and group, QuotaFuse tracks official proxy-scope usage,
 official external-scope usage, and local committed reservations, and admits only when:
 
-`effective_used = official_external + max(official_proxy, verified_proxy_baseline + proxy_local_committed) + external_safety_reserve`
+`effective_used = official_external_known + unknown_external + max(official_proxy, verified_proxy_baseline + proxy_local_committed) + external_safety_reserve`
 
 `remaining = max(0, floor(daily_limit × safety_pct) − effective_used)`
 
-Configure `policy.externalSafetyReserve` per group as the conservative
+External unknown models (outside the reviewed official group map) form a
+single group-independent daily total counted into **both** groups'
+`effective_used`, keeping each group's upper bound safe; confirmed groups
+are never double-subtracted, diagnostics are retained, and any safe-int
+overflow fails closed as `INVALID_USAGE`. Configure `policy.externalSafetyReserve` per group as the conservative
 upper bound for external consumption during official visibility delay plus
 the 120s poll interval. QuotaFuse only gates its own admissions; it never
 limits, stops, or modifies external services. Use a **dedicated routing
 project used by nothing but QuotaFuse** — the usage-dedup math is only
 sound under that premise, enforced by an expiring
 `proxyProjectDedicatedAttestedUntil` attestation plus a runtime tripwire.
+The tripwire stays tight with no tolerance: `/responses/input_tokens`
+preflight billing attribution is unverified (it cannot be confirmed with a
+real paid API), so preflight usage attributed to the routing project can
+also trip it — diagnostics point at both project sharing and preflight
+attribution, with no verified-safe claim. The collector polls every 120s.
 Upgrading from a pre-shared-accounting release changes the policy
 fingerprint: run the audited in-place migration
 (`npm run accounting:shared-migration`, history fully preserved) — see the

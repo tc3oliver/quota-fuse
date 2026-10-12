@@ -98,18 +98,20 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
           } else {
             // External scope NEVER consults the admission whitelist: outside
             // services choose their own models. Classification always uses
-            // the reviewed official group map. Models outside that map are
-            // conservatively counted in Premium (never ignored, never assumed
-            // free or paid-eligible) and recorded for operator review with
-            // explicit diagnostics. This pauses nothing by itself.
+            // the reviewed official group map. Models outside that map have
+            // UNCONFIRMED groups: their tokens are recorded for diagnostics
+            // and counted in BOTH groups' conservative estimates by the
+            // ledger (never ignored, never assumed free or paid-eligible).
+            // This pauses nothing by itself.
             group = groupForUnrestrictedModel(row.model);
-            external[group] += tokens;
-            if (!Number.isSafeInteger(external[group])) throw new Error('Overflow in usage sum');
             if (!isKnownModel(row.model)) {
               const prev = unknownModels[row.model];
               const sum = (prev?.tokens ?? 0) + tokens;
               if (!Number.isSafeInteger(sum)) throw new Error('Overflow in usage sum');
               unknownModels[row.model] = { group, tokens: sum };
+            } else {
+              external[group] += tokens;
+              if (!Number.isSafeInteger(external[group])) throw new Error('Overflow in usage sum');
             }
           }
         }

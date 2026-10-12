@@ -222,3 +222,42 @@ test('snapshot without trustworthy data reports nulls, not zero usage', () => {
     assert.equal(snap.state, 'DATA_UNVERIFIED');
   } finally { l.close(); }
 });
+
+// Unknown external tokens count in BOTH groups; confirmed models never double-count.
+test('unknown external tokens bound both groups without double-counting known models', () => {
+  const l = verifiedLedger(), c = cfg();
+  try {
+    l.publishSharedUsage(day, { premium: 0, economy: 0 }, { premium: 50, economy: 500 },
+      new Date(), { 'future-model-2099': { group: 'premium', tokens: 10 } });
+    const p = l.snapshot(c, day, P);
+    assert.equal(p.official_external_usage, 50);
+    assert.equal(p.external_unknown_tokens, 10);
+    assert.equal(p.official_org_usage, 60);
+    // premium: 50 known + 10 unknown + max(0,0) + 10000
+    assert.equal(p.effective_used, 60 + 10000);
+    const e = l.snapshot(c, day, E);
+    assert.equal(e.official_external_usage, 500);
+    // economy: 500 known + 10 unknown + max(0,0) + 100000
+    assert.equal(e.effective_used, 510 + 100000);
+    assert.deepEqual(e.external_unknown_models, [{ model: 'future-model-2099', group: 'premium', tokens: 10 }]);
+  } finally { l.close(); }
+});
+
+// Overflow and negativity can never sneak into admission math.
+test('absurd usage figures fail closed instead of wrapping or going negative', () => {
+  const c = cfg();
+  const huge = Number.MAX_SAFE_INTEGER;
+  const l = new Ledger(':memory:');
+  try {
+    // Fresh baseline at huge scale (no tripwire on first observation)...
+    l.publishSharedUsage(day, { premium: huge, economy: 0 }, { premium: 0, economy: 0 });
+    // ...but every downstream sum overflows safely instead of wrapping.
+    assert.throws(() => l.snapshot(c, day, P), (e: any) => e.code === 'INVALID_USAGE');
+    const l2 = new Ledger(':memory:');
+    try {
+      l2.publishSharedUsage(day, { premium: 0, economy: 0 }, { premium: 0, economy: 0 },
+        new Date(), { 'future-model-2099': { group: 'premium', tokens: huge } });
+      assert.throws(() => l2.snapshot(c, day, E), (e: any) => e.code === 'INVALID_USAGE');
+    } finally { l2.close(); }
+  } finally { l.close(); }
+});
