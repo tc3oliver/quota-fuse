@@ -38,8 +38,9 @@ test('retired project-dedication and costs attestations never gate admission', (
   }
 });
 
-// Dedicated project: reflected settlement dedups via max() with gate passing.
-test('dedicated proxy dedups reflected settlement and passes the gate', () => {
+// No dedication premise: reflected settlement is added conservatively
+// (official increments may be foreign); the gate still passes.
+test('dedicated proxy double-counts reflected settlement conservatively and passes the gate', () => {
   const c = cfg(), l = verifiedLedger();
   const oldToken = process.env.QG_PROXY_TOKEN, oldKey = process.env.OPENAI_API_KEY;
   process.env.QG_PROXY_TOKEN = 'dedication-gate-token-1234567890123456';
@@ -51,7 +52,8 @@ test('dedicated proxy dedups reflected settlement and passes the gate', () => {
     l.publishSharedUsage(day, { premium: 41000, economy: 0 }, { premium: 7000, economy: 0 });
     assert.doesNotThrow(() => gate(c, l));
     const snap = l.snapshot(c, day, 'premium');
-    assert.equal(snap.effective_used, 7000 + 41000 + 10000);
+    // effective = 41000 official + 7000 external + 41000 settled + 10000.
+    assert.equal(snap.effective_used, 41000 + 7000 + 41000 + 10000);
   } finally {
     l.close();
     if (oldToken === undefined) delete process.env.QG_PROXY_TOKEN; else process.env.QG_PROXY_TOKEN = oldToken;
@@ -88,12 +90,12 @@ test('delayed partial reflection keeps full reserve until catch-up', () => {
     // Nothing reflected yet: full 800 retained.
     l.publishSharedUsage(day, { premium: 0, economy: 0 }, { premium: 0, economy: 0 });
     assert.equal(l.snapshot(c, day, 'premium').effective_used, 800 + 10000);
-    // Partial reflection: max() still covers the unreflected remainder.
+    // Partial reflection: settled is still added in full (conservative).
     l.publishSharedUsage(day, { premium: 300, economy: 0 }, { premium: 0, economy: 0 });
-    assert.equal(l.snapshot(c, day, 'premium').effective_used, 800 + 10000);
-    // Full catch-up: counted once, never less.
+    assert.equal(l.snapshot(c, day, 'premium').effective_used, 300 + 800 + 10000);
+    // Full catch-up: added on top, never less.
     l.publishSharedUsage(day, { premium: 800, economy: 0 }, { premium: 0, economy: 0 });
-    assert.equal(l.snapshot(c, day, 'premium').effective_used, 800 + 10000);
+    assert.equal(l.snapshot(c, day, 'premium').effective_used, 800 + 800 + 10000);
   } finally { l.close(); }
 });
 

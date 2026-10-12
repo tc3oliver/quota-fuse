@@ -3,7 +3,7 @@ import { readFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { utcDay, nextReset, type Config, type Group } from './config.ts';
+import { utcDay, nextReset, EXECUTION_WINDOW_MS, type Config, type Group } from './config.ts';
 
 export interface Reservation {
   phase: 'PREFLIGHT' | 'DISPATCHED';
@@ -376,24 +376,50 @@ export class Ledger {
       throw new LedgerError('INVALID_USAGE', 'Unverifiable unknown-model accounting');
     return r.t;
   }
-  /** Conservative carryover of older unresolved reservations into a new day.
-   * Every PENDING/UNKNOWN/MANUAL_REVIEW reservation from an earlier UTC day
-   * keeps its full reserve deducted from that group until it settles — it is
-   * never assumed terminated, never re-dispatched, never forged COMPLETED,
-   * and never deleted. The only exemption is a dispatched UNKNOWN proven by
-   * review to have finalized inside its original day (its tokens cannot bill
-   * to the new day). Review is an optional conservatism reduction, never a
-   * daily requirement: unreviewed rows simply keep reducing admission by
-   * their bounded reserve. Overflow or unreadable state fails closed. */
+  /** Conservative cross-day carryover with an automatic, verifiable lifecycle.
+   *
+   * A row is carried into day D only while it could PROVABLY still add tokens
+   * to D's official bucket:
+   * - phase must be DISPATCHED (the request actually left the proxy). Rows
+   *   that never dispatched (phase PREFLIGHT, any state) provably consumed
+   *   zero tokens on every day and are never carried.
+   * - admitted_at + EXECUTION_WINDOW_MS must reach D's midnight. The window
+   *   is locally ENFORCED (preflight + upstream abort timeouts + skew), not
+   *   assumed: after it, the connection is aborted and store:false runs do
+   *   not continue, so no new billable tokens can land on later days. No
+   *   official-delay bound is assumed anywhere — delay only moves tokens
+   *   between APPEARANCE times, never across day-bucket attribution.
+   * - the reviewed-old-day exemption still applies (proven to have finalized
+   *   inside its original day; review stays OPTIONAL, only reducing conservatism).
+   *
+   * History and idempotency are retained forever; only the daily DEDUCTION
+   * expires, and only on proof — never on timeout-alone (a timed-out request
+   * keeps its full reserve for every day its window overlaps), never deleted,
+   * never re-dispatched, never forged COMPLETED. If a row could affect today
+   * and cannot be proven otherwise, it stays deducted — but it only tightens
+   * admission, never locks the proxy. Residual risk (provider-side
+   * continuation after client abort) is documented, not hand-waved; per-row
+   * exposure stays bounded by its admission-time reserve. Overflow or
+   * unreadable state fails closed. */
   crossDayCarry(day: string, group: Group): number {
     let r: any;
     try {
+      const dayStart = Date.parse(day + 'T00:00:00Z');
+      if (!Number.isFinite(dayStart)) throw new Error('bad day');
+      const earliest = new Date(dayStart - EXECUTION_WINDOW_MS).toISOString();
+      // Corrupt rows without a trustworthy admission timestamp must fail
+      // closed, never silently drop out of the carry (which would undercount).
+      const bad = this.db.prepare(`SELECT COUNT(*) AS n FROM reservations
+        WHERE utc_day < ? AND group_name = ? AND state IN ('PENDING','UNKNOWN','MANUAL_REVIEW')
+          AND phase = 'DISPATCHED' AND (admitted_at IS NULL OR admitted_at = '')`).get(day, group) as any;
+      if ((bad?.n ?? 1) > 0) throw new LedgerError('INVALID_USAGE', 'Unverifiable cross-day carryover');
       r = this.db.prepare(`SELECT COALESCE(SUM(r.reserved),0) AS t FROM reservations AS r
         LEFT JOIN dispatched_day_reviews AS d ON d.idempotency_key = r.idempotency_key
         WHERE r.utc_day < ? AND r.group_name = ? AND r.state IN ('PENDING','UNKNOWN','MANUAL_REVIEW')
+          AND r.phase = 'DISPATCHED' AND r.admitted_at >= ?
           AND NOT (r.state='UNKNOWN' AND r.phase='DISPATCHED'
             AND d.idempotency_key IS NOT NULL AND d.utc_day=r.utc_day
-            AND d.reserved=r.reserved)`).get(day, group) as any;
+            AND d.reserved=r.reserved)`).get(day, group, earliest) as any;
     } catch {
       throw new LedgerError('INVALID_USAGE', 'Unverifiable cross-day carryover');
     }
@@ -456,23 +482,25 @@ export class Ledger {
     // Unattended shared-quota accounting. No project-dedication premise:
     //
     // effective_used = official_proxy + official_external_known
-    //   + unknown_external + proxy_unreflected + cross_day_carry
+    //   + unknown_external + proxy_local_committed + cross_day_carry
     //   + external_safety_reserve
-    // proxy_unreflected = outstanding + max(0, anchor + settled − official_proxy)
+    // proxy_local_committed = outstanding + settled (SAME-day rows)
     //
     // - official_proxy / official_external_known: org-wide cumulative usage
     //   with a confirmed group. External and foreign-project traffic is
     //   legitimate and always counted — it can only tighten admission.
     // - unknown_external: external tokens whose group is unconfirmed, counted
     //   in BOTH groups (they belong to exactly one, so each bound stays safe).
-    // - proxy_unreflected: locally committed but not-yet-visible proxy usage
-    //   is added ON TOP of the official reading. In-flight reservations
-    //   (outstanding) are always added in full — they cannot have settled
-    //   yet; settled tokens already reflected officially cancel out via the
-    //   max() term instead of double-counting. Uncertain tokens may be
-    //   deducted twice (conservative); they can never inflate availability.
-    // - cross_day_carry: older unresolved reservations keep their full
-    //   reserve deducted (never assumed terminated). See crossDayCarry().
+    // - proxy_local_committed: locally committed usage is added IN FULL on
+    //   top of the official reading. Official increments are NEVER treated
+    //   as proof that local completions were reflected: under mixed-project
+    //   traffic the same official tokens could be foreign, so netting settled
+    //   against official growth would undercount. Uncertain tokens are
+    //   deliberately deducted twice (safe direction, at some utilization
+    //   cost); they can never inflate availability.
+    // - cross_day_carry: older dispatched-but-unresolved reservations keep
+    //   their full reserve deducted while their enforced execution window
+    //   could still overlap today (never assumed terminated). See crossDayCarry().
     // - external_safety_reserve: operator bound for external consumption
     //   during official visibility delay + poll interval.
     // - This is a conservative admission estimate, NOT an official promise of
@@ -481,16 +509,14 @@ export class Ledger {
     const anchored = obs?.anchor_tokens !== null && obs?.anchor_tokens !== undefined;
     const externalKnown = obs?.official_external !== null && obs?.official_external !== undefined;
     const proxyOfficial = anchored ? (obs!.official_high_watermark as number) : 0;
-    const anchor = anchored ? (obs!.anchor_tokens as number) : 0;
-    const unreflectedSettled = anchored ? Math.max(0, anchor + settled - proxyOfficial) : 0;
-    const proxyUnreflected = outstanding + unreflectedSettled;
+    const proxyCommitted = settled + outstanding;
     const unknownExternal = this.unknownExternalTotal(day);
     const carry = this.crossDayCarry(day, group);
     const externalTotal = externalKnown ? (obs!.official_external as number) + unknownExternal : 0;
     const effective = anchored && externalKnown
-      ? proxyOfficial + externalTotal + proxyUnreflected + carry + reserve
+      ? proxyOfficial + externalTotal + proxyCommitted + carry + reserve
       : safetyCap;
-    if (!Number.isSafeInteger(proxyUnreflected) || !Number.isSafeInteger(externalTotal) || !Number.isSafeInteger(carry) || !Number.isSafeInteger(effective)) throw new LedgerError('INVALID_USAGE', 'Usage overflow');
+    if (!Number.isSafeInteger(proxyCommitted) || !Number.isSafeInteger(externalTotal) || !Number.isSafeInteger(carry) || !Number.isSafeInteger(effective)) throw new LedgerError('INVALID_USAGE', 'Usage overflow');
     const ageMs = !!obs && anchored && externalKnown ? now.getTime() - Date.parse(obs.reconciled_at) : NaN;
     const fresh = anchored && externalKnown && !!obs && ageMs >= 0 && ageMs <= config.policy.reconcileMaxAgeSeconds * 1000;
     const observationAge = !!obs && Number.isFinite(Date.parse(obs.reconciled_at)) ? Math.max(0, Math.floor((now.getTime() - Date.parse(obs.reconciled_at)) / 1000)) : null;
@@ -510,9 +536,8 @@ export class Ledger {
       official_org_usage: officialOrg,
       official_external_usage: externalKnown ? (obs!.official_external as number) : null,
       official_proxy_usage: obs?.official_high_watermark ?? null,
-      proxy_local_committed: settled + outstanding,
+      proxy_local_committed: proxyCommitted,
       proxy_pending_reserved: outstanding,
-      proxy_unreflected_tokens: anchored && externalKnown ? proxyUnreflected : null,
       cross_day_carry: carry,
       external_safety_reserve: reserve,
       external_unknown_tokens: unknownExternal,

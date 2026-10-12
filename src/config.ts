@@ -103,5 +103,19 @@ export function loadConfig(path = process.env.QG_CONFIG ?? './config.json'): Con
   return validateConfig(JSON.parse(readFileSync(resolve(path), 'utf8')) as Config);
 }
 export function utcDay(d = new Date()): string { return d.toISOString().slice(0, 10); }
+
+/** Enforced upstream time bounds (single source of truth; NOT fingerprinted).
+ * The proxy aborts the preflight counter after PREFLIGHT_TIMEOUT_MS and the
+ * generation request after UPSTREAM_TIMEOUT_MS (client disconnect aborts even
+ * earlier). EXECUTION_WINDOW_MS = preflight + upstream + clock-skew margin is
+ * therefore a CREDIBLE, locally-enforced upper bound on how long a request
+ * admitted at time T can still produce billable tokens (nothing billable
+ * after T + window: the connection is aborted and store:false runs do not
+ * continue server-side). The ledger's cross-day carry uses exactly this
+ * bound — never an assumed official-delay bound, never an arbitrary TTL. */
+export const PREFLIGHT_TIMEOUT_MS = 30000;
+export const UPSTREAM_TIMEOUT_MS = 120000;
+const CLOCK_SKEW_MS = 5000;
+export const EXECUTION_WINDOW_MS = PREFLIGHT_TIMEOUT_MS + UPSTREAM_TIMEOUT_MS + CLOCK_SKEW_MS;
 export function nextReset(day: string): string { return new Date(Date.parse(day + 'T00:00:00Z') + 86400000).toISOString(); }
 export function attestedUntil(date: string | null, now: Date): boolean { return !!date && Date.parse(date) > now.getTime(); }

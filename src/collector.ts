@@ -83,14 +83,16 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
           const isProxy = row.project_id === config.dataSharing.projectId;
           let group: Group;
           if (isProxy) {
-            // Proxy scope mirrors admission exactly. A whitelisted deployment
-            // that observes a non-whitelisted model inside its DEDICATED
-            // project proves foreign use of that project (or config drift):
-            // fail closed so dedication is re-verified before admission.
-            if (!openMode && !allowlist.has(row.model)) throw new Error('Proxy project used outside the admission whitelist');
-            group = !openMode && config.dataSharing.modelGroupAccounting !== 'official_v1'
+            // Usage collection and admission filtering are SEPARATE duties.
+            // The whitelist gates what the PROXY accepts; it never judges
+            // official usage rows. Any model in any project is classified by
+            // the reviewed official group map (legacy configs keep their
+            // operator-supplied groups), so a non-whitelisted model can never
+            // stop the collector. Unknown proxy models land in proxy Premium
+            // (conservative); unknown external models go to diagnostics.
+            group = !openMode && config.dataSharing.modelGroupAccounting !== 'official_v1' && allowlist.has(row.model)
               ? allowlist.get(row.model)!
-              : openMode && config.dataSharing.modelGroupAccounting !== 'official_v1'
+              : openMode && config.dataSharing.modelGroupAccounting !== 'official_v1' && !isKnownModel(row.model)
                 ? 'premium'
                 : groupForUnrestrictedModel(row.model);
             proxy[group] += tokens;

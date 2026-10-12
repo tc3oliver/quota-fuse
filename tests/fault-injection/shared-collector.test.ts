@@ -107,7 +107,7 @@ test('regression across either scope pauses without overwriting', async () => {
   } finally { l.close(); }
 });
 
-test('missing day bucket, unknown model and unattributable rows fail closed', async () => {
+test('missing day bucket and unattributable rows fail closed', async () => {
   const c = cfg();
   const empty = (async () => new Response(JSON.stringify({ object: 'page', data: [], has_more: false, next_page: null }), { status: 200 })) as typeof fetch;
   const l1 = new Ledger(':memory:');
@@ -115,17 +115,27 @@ test('missing day bucket, unknown model and unattributable rows fail closed', as
     await assert.rejects(() => collectOnce(c, l1, { fetchImpl: empty, adminKey: 'fake' }), /Missing official day bucket/);
     assert.equal(l1.observation(day, 'premium'), undefined);
   } finally { l1.close(); }
-  const unknownModel = (async () => new Response(JSON.stringify(bucket([{ model: 'mystery-model', project_id: 'proj_test', input_tokens: 1, output_tokens: 1 }])), { status: 200 })) as typeof fetch;
-  const l2 = new Ledger(':memory:');
-  try {
-    await assert.rejects(() => collectOnce(c, l2, { fetchImpl: unknownModel, adminKey: 'fake' }), /whitelist/);
-    assert.equal(l2.observation(day, 'premium'), undefined);
-  } finally { l2.close(); }
   const unattributed = (async () => new Response(JSON.stringify(bucket([{ model: c.quotas.premium.models[0], input_tokens: 1, output_tokens: 1 }])), { status: 200 })) as typeof fetch;
   const l3 = new Ledger(':memory:');
   try {
     await assert.rejects(() => collectOnce(c, l3, { fetchImpl: unattributed, adminKey: 'fake' }), /Unattributable/);
   } finally { l3.close(); }
+});
+
+test('proxy-scope unknown model is absorbed via official group map, never a failure', async () => {
+  const c = cfg();
+  // mystery-model is outside the proxy whitelist AND the reviewed official
+  // map: proxy scope classifies via the official map with unknown fallback
+  // to premium (2 tokens), and the collector keeps polling.
+  const unknownModel = (async () => new Response(JSON.stringify(bucket([{ model: 'mystery-model', project_id: 'proj_test', input_tokens: 1, output_tokens: 1 }])), { status: 200 })) as typeof fetch;
+  const l2 = new Ledger(':memory:');
+  try {
+    const result = await collectOnce(c, l2, { fetchImpl: unknownModel, adminKey: 'fake' });
+    assert.deepEqual(result, { proxy: { premium: 2, economy: 0 }, external: { premium: 0, economy: 0 }, unknownModels: {} });
+    assert.equal(l2.isPaused(), false);
+    assert.equal(l2.observation(day, 'premium')?.official_high_watermark, 2);
+    assert.equal(l2.snapshot(c, day, 'premium').effective_used, 2 + 10000);
+  } finally { l2.close(); }
 });
 
 // 18+20. Status API surfaces shared fields, nulls when untrusted, stable error contract.

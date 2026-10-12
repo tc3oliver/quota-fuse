@@ -63,8 +63,10 @@ test('premium saturation does not block economy', () => {
   l.close();
 });
 
-// 6. Official aggregate containing settled proxy tokens is not double-counted.
-test('settled proxy tokens reflected officially count once', () => {
+// 6. Official aggregate containing settled proxy tokens is added
+// conservatively (double-counted): under mixed-project traffic the same
+// official tokens could be foreign, so netting would undercount.
+test('settled proxy tokens reflected officially are added conservatively (double-count)', () => {
   const l = verifiedLedger(), c = cfg();
   admit(l, 'job', 50000);
   l.prepareDispatch(c, 'job', 40000, 1000);
@@ -72,9 +74,9 @@ test('settled proxy tokens reflected officially count once', () => {
   // Official aggregate now includes the 41000 settled tokens.
   l.publishSharedUsage(day, { premium: 41000, economy: 0 }, { premium: 0, economy: 0 });
   const snap = l.snapshot(c, day, P);
-  // max(41000, 0 + 41000) = 41000 counted once, + 10000 reserve
-  assert.equal(snap.effective_used, 51000);
-  assert.equal(snap.estimated_remaining, 850000 - 51000);
+  // 41000 official + 41000 settled + 10000 reserve.
+  assert.equal(snap.effective_used, 41000 + 41000 + 10000);
+  assert.equal(snap.estimated_remaining, 850000 - 92000);
   l.close();
 });
 
@@ -89,20 +91,21 @@ test('locally committed but officially invisible usage keeps full reserve', () =
   l.close();
 });
 
-// 8. Delayed official catch-up never underestimates.
+// 8. Delayed official catch-up is added on top (conservative double-count).
 test('delayed official catch-up only raises the effective figure', () => {
   const l = verifiedLedger(), c = cfg();
   admit(l, 'a', 50000);
   l.complete('a', 40000);
   const before = l.snapshot(c, day, P).effective_used;
-  // Late-arriving official batch covers the settled tokens.
+  assert.equal(before, 40000 + 10000);
+  // Late-arriving official batch covers the settled tokens: added in full.
   l.publishSharedUsage(day, { premium: 40000, economy: 0 }, { premium: 0, economy: 0 });
   const after = l.snapshot(c, day, P).effective_used;
-  assert.ok(after! <= before! || after === before);
-  assert.equal(after, 40000 + 10000);
+  assert.ok(after! >= before!);
+  assert.equal(after, 40000 + 40000 + 10000);
   // And a LATER higher official (delayed external batch) raises it.
   l.publishSharedUsage(day, { premium: 40000, economy: 0 }, { premium: 50000, economy: 0 });
-  assert.equal(l.snapshot(c, day, P).effective_used, 50000 + 40000 + 10000);
+  assert.equal(l.snapshot(c, day, P).effective_used, 40000 + 50000 + 40000 + 10000);
   l.close();
 });
 
@@ -157,7 +160,8 @@ test('new UTC day starts independent observations', () => {
   l.admit(c, { key: 'd1', hash: 'd1', requestId: 'd1', model: c.quotas.premium.models[0], group: P, day, reserve: 9000 });
   l.complete('d1', 9000);
   l.publishSharedUsage(day, { premium: 9000, economy: 0 }, { premium: 1000, economy: 0 });
-  assert.equal(l.snapshot(c, day, P).effective_used, 1000 + 9000 + 10000);
+  // effective = 9000 official + 1000 external + 9000 settled + 10000 reserve.
+  assert.equal(l.snapshot(c, day, P).effective_used, 9000 + 1000 + 9000 + 10000);
   const tomorrow = '2999-01-02';
   assert.equal(nextReset('2999-01-01'), '2999-01-02T00:00:00.000Z');
   // Yesterday 16:00 UTC == Taipei midnight; UTC 00:00 == Taipei 08:00.
@@ -172,19 +176,35 @@ test('new UTC day starts independent observations', () => {
   l.close();
 });
 
-// 16. Prior-day UNKNOWN is carried as a bounded reserve; history retained.
+// 16. Prior-day DISPATCHED UNKNOWN inside the execution window is carried;
+// older rows stop deducting automatically. History/idempotency retained.
 test('prior-day UNKNOWN carries its reserve without blocking the new day', () => {
-  const l = verifiedLedger(), c = cfg(), oldDay = '2026-01-01';
-  l.publishSharedUsage(oldDay, { premium: 0, economy: 0 }, { premium: 0, economy: 0 }, new Date('2026-01-01T10:00:00Z'));
-  l.admit(c, { key: 'stuck', hash: 'x', requestId: 'x', model: c.quotas.premium.models[0], group: P, day: oldDay, reserve: 100, now: new Date('2026-01-01T10:00:30Z') });
+  const l = verifiedLedger(), c = cfg();
+  const todayStart = Date.parse(day + 'T00:00:00Z');
+  const prevDay = new Date(todayStart - 86400000).toISOString().slice(0, 10);
+  // Window row: admitted 60s before midnight, dispatched, then UNKNOWN.
+  // (Baseline published 90s before midnight so the window admission is fresh.)
+  l.publishSharedUsage(prevDay, { premium: 0, economy: 0 }, { premium: 0, economy: 0 }, new Date(todayStart - 90000));
+  l.admit(c, { key: 'stuck', hash: 'x', requestId: 'x', model: c.quotas.premium.models[0], group: P, day: prevDay, reserve: 100, now: new Date(todayStart - 60000) });
+  l.prepareDispatch(c, 'stuck', 80, 4, new Date(todayStart - 30000));
   l.unknown('stuck');
-  // A fresh new-day shared baseline restores admission with the 100-token
-  // upper bound carried automatically — no review, no waiting period.
+  // A fresh new-day shared baseline restores admission with the carried
+  // upper bound — no review, no waiting period.
   l.publishSharedUsage(day, { premium: 0, economy: 0 }, { premium: 0, economy: 0 });
-  assert.equal(l.snapshot(c, day, P).cross_day_carry, 100);
+  const carried = l.snapshot(c, day, P).cross_day_carry;
+  assert.ok(carried > 0);
   admit(l, 'newday', 10);
   assert.equal(l.find('stuck')?.state, 'UNKNOWN');
-  l.close();
+  // Expired row: admitted long before the window stops deducting.
+  const l2 = verifiedLedger(), c2 = cfg();
+  l2.publishSharedUsage(prevDay, { premium: 0, economy: 0 }, { premium: 0, economy: 0 }, new Date(prevDay + 'T10:00:00Z'));
+  l2.admit(c2, { key: 'old', hash: 'x', requestId: 'x', model: c2.quotas.premium.models[0], group: P, day: prevDay, reserve: 100, now: new Date(prevDay + 'T10:00:30Z') });
+  l2.prepareDispatch(c2, 'old', 80, 4, new Date(prevDay + 'T10:01:00Z'));
+  l2.unknown('old');
+  l2.publishSharedUsage(day, { premium: 0, economy: 0 }, { premium: 0, economy: 0 });
+  assert.equal(l2.snapshot(c2, day, P).cross_day_carry, 0);
+  assert.doesNotThrow(() => l2.admit(c2, { key: 'newday2', hash: 'n', requestId: 'n', model: c2.quotas.premium.models[0], group: P, day, reserve: 10 }));
+  l.close(); l2.close();
 });
 
 // 17. Restart, migration and legacy compatibility.

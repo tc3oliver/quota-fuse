@@ -15,16 +15,20 @@ Admin Usage includes aggregate input/output token usage, **not** real-time, atom
 
 ## Verified first observation / baseline
 
-The **first official observation** for a UTC day/group becomes a baseline only if no local reservation for that day/group exists. Admission then uses organization-shared accounting — official external usage, deduplicated proxy usage, and a conservative external reserve:
+The **first official observation** for a UTC day/group becomes a baseline only if no local reservation for that day/group exists. Admission then uses organization-shared accounting — official usage plus fully-additive local commitments plus lifecycle carry plus a conservative external reserve:
 
-`effective_used = official_proxy + official_external_known + unknown_external + outstanding + max(0, anchor + settled − official_proxy) + cross_day_carry + reserve`
+`effective_used = official_proxy + official_external_known + unknown_external + outstanding + settled + cross_day_carry + reserve`
 
 `remaining = max(0, floor(daily_limit × safety_pct) − effective_used)`
 
-- `official_external_known`: all other projects' cumulative usage in this group/day, classified by the reviewed official group map only — the proxy admission whitelist never applies to them. External production services may legally bypass the proxy; their consumption is **expected and never an anomaly**. It only tightens admission.
+- `official_proxy`: 路由專案官方累計。`official_external_known`：其他專案官方累計（已確認群組）。`outstanding`：當日未結算預留；`settled`：當日已結算實際用量——同日兩者**全額外加**，不做任何淨額扣除。`cross_day_carry`：生命週期結轉（僅 DISPATCHED-phase、窗口仍重疊新日的舊日未決列，見下）。`reserve`：外部安全保留。
+- **禁令——官方增量 ≠ 本地已反映**：官方讀數上升永不視為本地已結算用量已被反映的證明。混合流量反例：settled 100 未反映＋同專案外部 100＋官方讀數 100 → 計 200 + reserve（官方 100＋settled 100＋外部 100 的全額加法，不低估）。同理，官方讀數下降或持平也不得解讀為本地用量已被吸收。
+- **重複扣除聲明（利用率代價）**：已反映的 settled 會被重複扣除——官方已計、本地又加計。這是刻意的安全方向保守（只縮小可用額度，永不放大），代價是利用率：高外部流量日時准入會偏緊。`proxy_unreflected_tokens` 快照欄位已刪除，不再有「未反映差額」概念。
 - `unknown_external`: the same-day token total of external models outside the official group map. It is a single group-independent total counted into **both** Premium and Economy `effective_used`, so each group's upper bound stays safe. Confirmed-group rows are never double-subtracted. Unknown models are never ignored and never assumed free; per-day `external_unknown_models` diagnostics are retained for operator review. All sums use safe-int overflow checks; any overflow yields `INVALID_USAGE` fail-closed.
-- `official_proxy`: 路由專案官方累計。`outstanding`：當日未結算預留；`anchor + settled`：本地已錨定用量；`cross_day_carry`：跨日未決預留（PENDING/UNKNOWN/MANUAL_REVIEW）自動全額結轉新日同群組 `effective_used`，admit 不阻擋，歷史與冪等保留；`reserve`：外部安全保留。不依賴專案專用性：不確定 Token 寧可重複扣除，不增加可用額度。
-- `max(0, anchor + settled − official_proxy)`: 本地已錨定但官方尚未反映的用量缺口，保守加計；官方已反映的結算用量不重複扣除。路由專案**可與其他服務共用，無需專用**：proxy-scope 超量一律保守吸收，不設 tripwire；QuotaFuse 永不宣稱精確去重。
+- 執行窗口三要素（`src/config.ts`，`server.ts` 真實強制 abort）：`PREFLIGHT_TIMEOUT_MS` = 30000（preflight 強制超時）＋`UPSTREAM_TIMEOUT_MS` = 120000（上游 generation 強制超時）＋時鐘邊界 5000 = `EXECUTION_WINDOW_MS` = 155000ms。這是本地可執行的上界（連線到期即 abort），不是假設的官方延遲上界，更不是任意 TTL。官方延遲只影響 Token「出現」時間，不改變日歸屬；結轉到期只憑窗口證明，不憑逾時猜測。
+- `cross_day_carry` 只計 phase='DISPATCHED' 且 `admitted_at ≥ 新日 00:00Z − 155000ms` 的舊日未決列（PENDING/UNKNOWN/MANUAL_REVIEW，經證實終結於原日的 review 豁免除外）。PREFLIGHT-phase 列從未發送上游，可證零消耗，永不攜帶。逾時本身不等於零消耗：窗口重疊日照扣全額。admit 不阻擋，歷史與冪等保留。
+- 殘餘風險（如實保留，不用假設掩蓋）：client abort 後提供者端續跑可能存在；`store:false` 下 abort 即取消的解讀是**假設前提**，已在文件中寫明。每列風險仍以其准入時 reserve 為界；窗口到期釋放的是「每日扣除」，不是歷史責任。
+- `official_external_known`: all other projects' cumulative usage in this group/day, classified by the reviewed official group map only — the proxy admission whitelist never applies to them (`policy.classify` gates Proxy admission only, unchanged). External production services may legally bypass the proxy; their consumption is **expected and never an anomaly**. It only tightens admission. No out-of-whitelist model on any project stops the Collector; unmapped models go to diagnostics.
 - `external_safety_reserve`: operator-configured per-group bound (`policy.externalSafetyReserve`) for external consumption during official visibility delay plus the 120s poll interval. Estimate it as `peak external tokens/sec × (visibility delay + poll interval + margin)`. If no credible bound exists, keep the proxy paused. A fixed 0 is only valid with independently verified ~zero external traffic.
 - `estimated_remaining` is a conservative admission estimate, **not** an official free-balance promise, and **not** a zero-fee guarantee under unbounded external traffic.
 

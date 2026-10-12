@@ -34,8 +34,8 @@ test('slow healthy poll does not pause admissions or hold a SQLite write transac
     assert.equal(l.pauseReason(),null);
     assert.equal(l.observation(today,'premium')?.official_high_watermark,18);
     assert.equal(l.snapshot(c,today,'premium').local_settled,18);
-    // effective = 0 external + max(18, 0+18) + 10000 reserve
-    assert.equal(l.snapshot(c,today,'premium').estimated_remaining,850000-18-10000);
+    // effective = official 18 + settled 18 + 10000 reserve (conservative full add).
+    assert.equal(l.snapshot(c,today,'premium').estimated_remaining,850000-18-18-10000);
   }finally{l.close();}
 });
 

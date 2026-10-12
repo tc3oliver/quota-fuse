@@ -34,10 +34,10 @@ test('a. exact proxy publish matches local settlement without tripping', () => {
     assert.equal(l.isPaused(), false);
     assert.equal(l.observation(day, 'premium')?.official_high_watermark, 500);
     const snap = l.snapshot(c, day, 'premium');
-    // proxyEffective = max(500, 0+500) = 500; effective = 0 + 500 + 10000 reserve.
+    // effective = official 500 + settled 500 + 10000 reserve (conservative full add).
     assert.equal(snap.proxy_local_committed, 500);
     assert.equal(snap.official_proxy_usage, 500);
-    assert.equal(snap.effective_used, 500 + 10000);
+    assert.equal(snap.effective_used, 500 + 500 + 10000);
     assert.equal(snap.state, 'READY');
   } finally { l.close(); }
 });
@@ -58,7 +58,8 @@ test('b. proxy 501 over settled 500 is absorbed without locking', async () => {
     assert.equal(l.isPaused(), false);
     assert.equal(l.observation(day, 'premium')?.official_high_watermark, 501);
     const snap = l.snapshot(c, day, 'premium');
-    assert.equal(snap.effective_used, 501 + 10000);
+    // Conservative full add: 501 official + 500 settled + 10000 reserve.
+    assert.equal(snap.effective_used, 501 + 500 + 10000);
     // The collector keeps publishing normally afterwards.
     const counter = { calls: 0 };
     const r = await collectOnce(c, l, { fetchImpl: fetchOf(bucket([proxyRow(c, 501)]), counter), adminKey: 'fake' });
@@ -82,7 +83,8 @@ test('c. unsettled outstanding keeps full reservation with proxy 0', () => {
   } finally { l.close(); }
 });
 
-// d. Partial official visibility: max() dedup keeps the local upper bound.
+// d. Partial official visibility: settled is added in full (mixed traffic:
+// official increments may be foreign, so no netting against settled).
 test('d. partial proxy 300 under settled 800 does not trip', () => {
   const c = cfg(), l = verifiedLedger();
   try {
@@ -93,7 +95,7 @@ test('d. partial proxy 300 under settled 800 does not trip', () => {
     assert.equal(l.isPaused(), false);
     const snap = l.snapshot(c, day, 'premium');
     assert.equal(snap.official_proxy_usage, 300);
-    assert.equal(snap.effective_used, 800 + 10000);
+    assert.equal(snap.effective_used, 300 + 800 + 10000);
   } finally { l.close(); }
 });
 
@@ -108,7 +110,7 @@ test('e. proxy 5000 over settled 20 is absorbed and only tightens admission', ()
     l.publishSharedUsage(day, { premium: 5000, economy: 0 }, { premium: 0, economy: 0 });
     assert.equal(l.isPaused(), false);
     assert.equal(l.observation(day, 'premium')?.official_high_watermark, 5000);
-    assert.equal(l.snapshot(c, day, 'premium').effective_used, 5000 + 10000);
+    assert.equal(l.snapshot(c, day, 'premium').effective_used, 5000 + 20 + 10000);
     // Small admissions still flow; only truly exhausted ones refuse.
     l.admit(c, { key: 'e2', hash: 'e2', requestId: 'e2', model, group: 'premium', day, reserve: 10 });
     assert.throws(
