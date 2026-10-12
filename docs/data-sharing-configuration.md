@@ -74,14 +74,16 @@ No wildcard paid-model fallback is added by QuotaFuse. Never
 delete an existing SQLite ledger to bypass `POLICY_CHANGED` or `UNKNOWN`;
 policy changes require operator reconciliation.
 
-## Existing All projects limitation
+## Organization-shared projects
 
-The collector observes organization-wide usage but deliberately PAUSES
-if a row is attributed to another Project; this maintains the
-single-routing-Project accounting assumption. **All projects** enrollment
-does not make this a multi-Project quota router. Using other projects
-may consume the same incentive allowance and requires appropriate
-traffic isolation or later explicit multi-Project support.
+The collector observes organization-wide usage. Other-project usage is
+recorded as external scope and tightens admission via `effective_used`;
+it never pauses collection. **All projects** enrollment does not make
+this a multi-Project quota router, but the routing project itself **may
+be shared with other services** — shared proxy-scope usage is absorbed
+conservatively into `effective_used` (uncertain tokens deducted twice,
+never increasing admissible capacity). No project dedication is required
+or gated.
 
 Use a Project-scoped `OPENAI_API_KEY` in `.env.proxy`, and an independent
 Organization `OPENAI_ADMIN_KEY` in `.env.collector`. The default

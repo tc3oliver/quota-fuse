@@ -84,27 +84,40 @@ test('proxy usage within committed bounds is accepted; collector keeps polling a
   assert.equal(l.isPaused(),false);
  }finally{l.close();}
 });
-test('proxy official above local upper bound trips sticky project-sharing pause',async()=>{
+test('proxy official above local books is absorbed; collector keeps polling after transport failure',async()=>{
  const l=new Ledger(':memory:'),c=cfg();
  const day=new Date().toISOString().slice(0,10);
  l.publishSharedUsage(day,{premium:0,economy:0},{premium:0,economy:0});
- // No local traffic, yet the dedicated project reports 200 tokens:
- // foreign use of the proxy project (or a broken baseline). Sticky.
- const fake=(async()=>new Response(JSON.stringify(page([row(c.quotas.premium.models[0],100)])))) as typeof fetch;
+ l.admit(c,{key:'local',hash:'local',requestId:'local',model:c.quotas.premium.models[0],group:'premium',day,reserve:10});
+ l.complete('local',2);
+ // Official aggregate reflects the settled 2 (delayed).
+ const fake=(async()=>new Response(JSON.stringify(page([row(c.quotas.premium.models[0],1)])))) as typeof fetch;
  try{
-  await assert.rejects(()=>collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'}),/dedicated/);
-  assert.equal(l.pauseReason(),'PROXY_PROJECT_SHARED');
-  assert.equal(l.observation(day,'premium')?.official_high_watermark,0);
-  // External-only growth never trips: same tokens from another project record cleanly.
-  const ext=page([row(c.quotas.premium.models[0],100)]);
-  ext.data[0].results[0].project_id='proj_external';
-  const l2=new Ledger(':memory:');
-  try {
-    const r=await collectOnce(c,l2,{fetchImpl:(async()=>new Response(JSON.stringify(ext))) as typeof fetch,adminKey:'test-admin'});
-    assert.deepEqual(r.external,{premium:0,economy:0});
-    assert.deepEqual(r.unknownModels,{'gpt-test-2026-10-11':{group:'premium',tokens:200}});
-    assert.equal(l2.isPaused(),false);
-  } finally { l2.close(); }
+  const result=await collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'});
+  assert.deepEqual(result.proxy,{premium:2,economy:0});
+  assert.equal(l.isPaused(),false);
+  assert.equal(l.observation(day,'premium')?.official_high_watermark,2);
+  // A later transport failure pauses admission but stays recoverable:
+  // the next cycle still polls instead of locking permanently.
+  await assert.rejects(()=>collectOnce(c,l,{fetchImpl:(async()=>new Response('',{status:503})) as typeof fetch,adminKey:'test-admin'}),/Admin Usage API unsuccessful/);
+  assert.equal(l.pauseReason(),'COLLECTOR_UNVERIFIED');
+  const retry=await collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'});
+  assert.equal(retry.proxy.premium,2);
+  assert.equal(l.isPaused(),false);
+ }finally{l.close();}
+});
+test('proxy official far above local books is absorbed, never locks',async()=>{
+ const l=new Ledger(':memory:'),c=cfg();
+ const day=new Date().toISOString().slice(0,10);
+ l.publishSharedUsage(day,{premium:0,economy:0},{premium:0,economy:0});
+ // Foreign traffic inside the routing project (or counted preflight): the
+ // official reading counts in full and only tightens admission.
+ const fake=(async()=>new Response(JSON.stringify(page([row(c.quotas.premium.models[0],2500)])))) as typeof fetch;
+ try{
+  const result=await collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'});
+  assert.equal(result.proxy.premium,5000);
+  assert.equal(l.isPaused(),false);
+  assert.equal(l.snapshot(c,day,'premium').effective_used,5000+10000);
  }finally{l.close();}
 });
 test('collector cannot clear breached per-request usage bound',async()=>{

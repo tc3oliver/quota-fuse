@@ -107,8 +107,10 @@ npm run demo
 
 **Technical preview:** QuotaFuse cannot atomically query the official remaining
 complimentary balance. It fails closed without independently confirmed
-enrollment, proxy-project dedication, input-counter billing behavior and
-collector health; there is no automatic paid OpenAI fallback. The collector polls organization usage
+enrollment, input-counter billing behavior and
+collector health; there is no automatic paid OpenAI fallback. The routing
+project may be shared with other services — shared usage is absorbed
+conservatively, never assumed free. The collector polls organization usage
 every 120s, but official statistics may lag, so admission adds a configured
 `externalSafetyReserve` per group and `estimated_remaining` is a
 conservative local admission estimate — never an official free-balance
@@ -135,7 +137,7 @@ The org pool is shared with production services that bypass the proxy.
 Per UTC day and group, QuotaFuse tracks official proxy-scope usage,
 official external-scope usage, and local committed reservations, and admits only when:
 
-`effective_used = official_external_known + unknown_external + max(official_proxy, verified_proxy_baseline + proxy_local_committed) + external_safety_reserve`
+`effective_used = official_proxy + official_external_known + unknown_external + outstanding + max(0, anchor + settled − official_proxy) + cross_day_carry + reserve`
 
 `remaining = max(0, floor(daily_limit × safety_pct) − effective_used)`
 
@@ -143,18 +145,24 @@ External unknown models (outside the reviewed official group map) form a
 single group-independent daily total counted into **both** groups'
 `effective_used`, keeping each group's upper bound safe; confirmed groups
 are never double-subtracted, diagnostics are retained, and any safe-int
-overflow fails closed as `INVALID_USAGE`. Configure `policy.externalSafetyReserve` per group as the conservative
+overflow fails closed as `INVALID_USAGE`. `cross_day_carry` is the full
+reserved total of prior-day unresolved reservations
+(PENDING/UNKNOWN/MANUAL_REVIEW) automatically counted into the new day's
+same-group `effective_used` — history, idempotency and UNKNOWN rows are
+preserved, never re-sent or forged COMPLETED. An optional
+`reviewDispatchedDay` review can conservatively narrow a *proven*
+DISPATCHED UNKNOWN bounded to its original day; day-to-day recovery never
+needs it or its 24h cooldown. Configure `policy.externalSafetyReserve` per group as the conservative
 upper bound for external consumption during official visibility delay plus
 the 120s poll interval. QuotaFuse only gates its own admissions; it never
-limits, stops, or modifies external services. Use a **dedicated routing
-project used by nothing but QuotaFuse** — the usage-dedup math is only
-sound under that premise, enforced by an expiring
-`proxyProjectDedicatedAttestedUntil` attestation plus a runtime tripwire.
-The tripwire stays tight with no tolerance: `/responses/input_tokens`
-preflight billing attribution is unverified (it cannot be confirmed with a
-real paid API), so preflight usage attributed to the routing project can
-also trip it — diagnostics point at both project sharing and preflight
-attribution, with no verified-safe claim. The collector polls every 120s.
+limits, stops, or modifies external services. The routing project **may be
+shared with other services**: no project dedication is required or gated —
+official proxy-scope usage beyond the local upper bound is absorbed via the
+`max(0, anchor + settled − official_proxy)` term (uncertain tokens are
+deducted twice rather than ever increasing admissible capacity).
+`proxyProjectDedicatedAttestedUntil` and related attestations remain in old
+configs for compatibility only and are no longer admission gates.
+The collector polls every 120s.
 Upgrading from a pre-shared-accounting release changes the policy
 fingerprint: run the audited in-place migration
 (`npm run accounting:shared-migration`, history fully preserved) — see the

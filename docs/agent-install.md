@@ -48,9 +48,8 @@ asking a long questionnaire; do not stop at a plan.
 - **All projects:** The user already shares enabled data across their
   organization. Select **any existing** API Project as QuotaFuse's routing
   Project. Do not require a dedicated new Project.
-  Whichever existing Project is chosen, it must still be used **only** by
-  QuotaFuse afterwards (see proxy-project dedication); move any other
-  service out of it.
+  The routing project may be shared with other services afterwards —
+  shared usage is absorbed conservatively, never assumed free.
 - **Selected projects / single project:** Select **one of the Projects already
   opted into Data Sharing**. Never assume another Project is eligible solely
   because it belongs to the same Organization.
@@ -64,9 +63,9 @@ has already been independently verified and configured.
 QuotaFuse currently requires `dataSharing.projectId=proj_...` in
 `config.json` even when the OpenAI setting is All projects. It uses ONE
 Project per SQLite ledger and all token entitlements are still
-**organization-wide**, shared across every opted-in project. The current
-collector PAUSES if it observes other-project usage; do not disable this
-safety condition just to support All projects enrollment.
+**organization-wide**, shared across every opted-in project. The routing
+project may be shared with other services; shared usage is absorbed
+conservatively into `effective_used` and never pauses collection.
 
 Only if routing ID is missing, provide:
 https://platform.openai.com/settings/organization/projects
@@ -195,12 +194,14 @@ Fresh configs classify the 33 explicitly documented incentive model IDs
 into their respective groups, without a whitelist. Existing ledgers retain
 Premium-only accounting; **do not rewrite the policy fingerprint or migrate
 a running Ledger to the new `official_v1` mode**. Unknown models are not
-certified free. The routing project must be dedicated to QuotaFuse and
-re-attested before expiry (`proxyProjectDedicatedAttestedUntil`); other
+certified free. Daily recovery needs no review: prior-day unresolved
+reservations carry automatically; the optional dispatched-day review with
+its UTC-day cooldown is only a conservative narrowing tool. Other
 production services may share the org pool without
 passing QuotaFuse — record their load in `policy.externalSafetyReserve`,
 never throttle them, and never treat their usage as a collector fault.
-Read [the recovery runbook](runbook.md#reviewed-dispatched-unknown-at-utc-rollover)
+The routing project itself may also be shared; shared proxy-scope usage
+is absorbed conservatively. Read [the recovery runbook](runbook.md#cross-day-unknown-automatic-carry)
 for strict terminal-response evidence requirements, a full UTC-day billing
 cooldown, and an audited dispatched-day UNKNOWN review. Do not automatically
 execute reconciliation or alter any real ledger without explicit approval.

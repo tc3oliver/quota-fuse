@@ -5,19 +5,25 @@ import { makeServer } from '../../src/server.ts';
 import { readinessIssues } from '../../src/policy.ts';
 import { cfg, verifiedLedger } from '../helpers.ts';
 
-test('readiness issues describe missing counter, costs and operator evidence without secrets',()=>{
+test('readiness issues describe missing counter and operator evidence without secrets',()=>{
  const c=cfg(); const ledger=verifiedLedger();
  try {
    c.policy.inputCounter='reject';
    c.policy.preflightCostVerified=false;
    c.policy.eligibilityAttestedUntil=null;
    c.policy.exclusiveOrgTrafficAttestedUntil=null;
+   // Retired attestations are compat-only: null costs/dedication must NOT
+   // appear as issues and must not block admission.
    c.policy.manualCostsAuditedUntil=null;
+   (c.policy as any).proxyProjectDedicatedAttestedUntil=null;
    const issues=readinessIssues(c,ledger);
    for(const code of [
     'PREFLIGHT_COUNTER_DISABLED','PREFLIGHT_COST_UNVERIFIED',
-    'ELIGIBILITY_ATTESTATION_MISSING','COST_AUDIT_UNVERIFIED'
+    'ELIGIBILITY_ATTESTATION_MISSING'
    ])assert.ok(issues.includes(code),code);
+   assert.ok(!issues.includes('COST_AUDIT_UNVERIFIED'));
+   assert.ok(!issues.includes('PROXY_PROJECT_DEDICATION_UNVERIFIED'));
+   assert.ok(!issues.includes('PRIOR_DAY_UNKNOWN'));
    assert.ok(!JSON.stringify(issues).includes('sk-'));
  }finally{ledger.close();}
 });

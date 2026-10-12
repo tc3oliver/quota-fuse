@@ -21,9 +21,6 @@ function fetchOf(page: unknown, counter?: { calls: number }) {
     return new Response(JSON.stringify(page), { status: 200 });
   }) as typeof fetch;
 }
-function rejectsWithCode(p: Promise<unknown>, code: string) {
-  return assert.rejects(p, (e: unknown) => e instanceof LedgerError && e.code === code);
-}
 
 // a. Normal: exact proxy accounting never trips the dedicated-project tripwire.
 test('a. exact proxy publish matches local settlement without tripping', () => {
@@ -45,8 +42,10 @@ test('a. exact proxy publish matches local settlement without tripping', () => {
   } finally { l.close(); }
 });
 
-// b. Preflight over-count by 1 token trips PROXY_PROJECT_SHARED and stays sticky.
-test('b. proxy 501 over settled 500 trips PROXY_PROJECT_SHARED and stays sticky', async () => {
+// b. Small over-counts are absorbed conservatively — never a lock.
+// (No dedication premise: official tokens are always counted, unreflected
+// local reservations are added on top.)
+test('b. proxy 501 over settled 500 is absorbed without locking', async () => {
   const c = cfg(), l = verifiedLedger();
   try {
     const model = premiumModel(c);
@@ -54,31 +53,18 @@ test('b. proxy 501 over settled 500 trips PROXY_PROJECT_SHARED and stays sticky'
     l.prepareDispatch(c, 'b1', 400, 100);
     l.complete('b1', 500);
     l.publishSharedUsage(day, { premium: 500, economy: 0 }, { premium: 0, economy: 0 });
-    let trip: unknown = null;
-    try {
-      l.publishSharedUsage(day, { premium: 501, economy: 0 }, { premium: 0, economy: 0 });
-    } catch (e) { trip = e; }
-    assert.ok(trip instanceof LedgerError);
-    assert.equal(trip.code, 'PROXY_PROJECT_SHARED');
-    assert.match(trip.message, /dedicated|preflight/i);
-    assert.equal(l.pauseReason(), 'PROXY_PROJECT_SHARED');
-    // Watermark keeps the old value.
-    assert.equal(l.observation(day, 'premium')?.official_high_watermark, 500);
-    // Sticky: a second direct publish is refused as an operator hold.
-    await rejectsWithCode(
-      (async () => l.publishSharedUsage(day, { premium: 500, economy: 0 }, { premium: 0, economy: 0 }))(),
-      'MANUAL_REVIEW_REQUIRED',
-    );
-    assert.equal(l.pauseReason(), 'PROXY_PROJECT_SHARED');
-    // Collector still performs its read-only fetch, then refuses to overwrite.
+    // One extra token (e.g. counted preflight or foreign use) only tightens.
+    l.publishSharedUsage(day, { premium: 501, economy: 0 }, { premium: 0, economy: 0 });
+    assert.equal(l.isPaused(), false);
+    assert.equal(l.observation(day, 'premium')?.official_high_watermark, 501);
+    const snap = l.snapshot(c, day, 'premium');
+    assert.equal(snap.effective_used, 501 + 10000);
+    // The collector keeps publishing normally afterwards.
     const counter = { calls: 0 };
-    await rejectsWithCode(
-      collectOnce(c, l, { fetchImpl: fetchOf(bucket([proxyRow(c, 501)]), counter), adminKey: 'fake' }),
-      'MANUAL_REVIEW_REQUIRED',
-    );
+    const r = await collectOnce(c, l, { fetchImpl: fetchOf(bucket([proxyRow(c, 501)]), counter), adminKey: 'fake' });
     assert.ok(counter.calls >= 1);
-    assert.equal(l.pauseReason(), 'PROXY_PROJECT_SHARED');
-    assert.equal(l.observation(day, 'premium')?.official_high_watermark, 500);
+    assert.equal(r.proxy.premium, 501);
+    assert.equal(l.isPaused(), false);
   } finally { l.close(); }
 });
 
@@ -111,33 +97,29 @@ test('d. partial proxy 300 under settled 800 does not trip', () => {
   } finally { l.close(); }
 });
 
-// e. Genuine sharing: proxy far above the local upper bound trips and blocks admission.
-test('e. proxy 5000 over settled 20 trips sticky and blocks admit', () => {
+// e. Genuine sharing: proxy far above local books is absorbed, never locks.
+// Admission only tightens; it can never be loosened by foreign traffic.
+test('e. proxy 5000 over settled 20 is absorbed and only tightens admission', () => {
   const c = cfg(), l = verifiedLedger();
   try {
     const model = premiumModel(c);
     l.admit(c, { key: 'e1', hash: 'e1', requestId: 'e1', model, group: 'premium', day, reserve: 100 });
     l.complete('e1', 20);
-    let trip: unknown = null;
-    try {
-      l.publishSharedUsage(day, { premium: 5000, economy: 0 }, { premium: 0, economy: 0 });
-    } catch (e) { trip = e; }
-    assert.ok(trip instanceof LedgerError);
-    assert.equal(trip.code, 'PROXY_PROJECT_SHARED');
-    assert.equal(l.pauseReason(), 'PROXY_PROJECT_SHARED');
-    // Watermark is not overwritten by the tripping reading.
-    assert.equal(l.observation(day, 'premium')?.official_high_watermark, 0);
-    // Sticky: still held after the failure, and new admissions are refused.
-    assert.equal(l.pauseReason(), 'PROXY_PROJECT_SHARED');
+    l.publishSharedUsage(day, { premium: 5000, economy: 0 }, { premium: 0, economy: 0 });
+    assert.equal(l.isPaused(), false);
+    assert.equal(l.observation(day, 'premium')?.official_high_watermark, 5000);
+    assert.equal(l.snapshot(c, day, 'premium').effective_used, 5000 + 10000);
+    // Small admissions still flow; only truly exhausted ones refuse.
+    l.admit(c, { key: 'e2', hash: 'e2', requestId: 'e2', model, group: 'premium', day, reserve: 10 });
     assert.throws(
-      () => l.admit(c, { key: 'e2', hash: 'e2', requestId: 'e2', model, group: 'premium', day, reserve: 10 }),
-      (e: unknown) => e instanceof LedgerError && e.code === 'FREE_QUOTA_UNVERIFIED',
+      () => l.admit(c, { key: 'e3', hash: 'e3', requestId: 'e3', model, group: 'premium', day, reserve: 850000 }),
+      (e: unknown) => e instanceof LedgerError && e.code === 'FREE_QUOTA_EXHAUSTED',
     );
   } finally { l.close(); }
 });
 
-// f. Small preflight-shaped excess inside outstanding headroom never trips.
-test('f. proxy 11 inside outstanding 5000 does not trip', () => {
+// f. Small in-flight reservations ride on top of the official reading.
+test('f. proxy 11 with outstanding 5000 keeps full reservation on top', () => {
   const c = cfg(), l = verifiedLedger();
   try {
     const model = premiumModel(c);
@@ -146,6 +128,6 @@ test('f. proxy 11 inside outstanding 5000 does not trip', () => {
     assert.equal(l.isPaused(), false);
     assert.equal(l.observation(day, 'premium')?.official_high_watermark, 11);
     const snap = l.snapshot(c, day, 'premium');
-    assert.equal(snap.effective_used, 5000 + 10000);
+    assert.equal(snap.effective_used, 11 + 5000 + 10000);
   } finally { l.close(); }
 });

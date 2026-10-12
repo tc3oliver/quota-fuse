@@ -137,18 +137,17 @@ test('reserve config bounds are enforced and fingerprinted', () => {
   } finally { l.close(); }
 });
 
-// 14. Same-project foreign usage is NOT deduped away: it trips the
-// dedication tripwire instead of silently undercounting. Underestimate
-// counterexample: 20 local vs 100000 official in the routing project can
-// only be foreign traffic (dedicated project), so max() must not launder it.
-test('foreign usage inside the proxy project trips instead of undercounting', () => {
+// 14. Same-project foreign usage is absorbed conservatively, never locks.
+// effective = official (100000, foreign included) + unreflected local on top.
+test('foreign usage inside the proxy project is absorbed, never locks', () => {
   const l = verifiedLedger(), c = cfg();
   admit(l, 'mine', 20000);
-  assert.throws(() => l.publishSharedUsage(day, { premium: 100000, economy: 0 }, { premium: 0, economy: 0 }),
-    (e: any) => e.code === 'PROXY_PROJECT_SHARED');
-  assert.equal(l.pauseReason(), 'PROXY_PROJECT_SHARED');
-  assert.equal(l.observation(day, 'premium')?.official_high_watermark, 0);
-  assert.throws(() => admit(l, 'after', 10), (e: any) => e.code === 'FREE_QUOTA_UNVERIFIED');
+  l.publishSharedUsage(day, { premium: 100000, economy: 0 }, { premium: 0, economy: 0 });
+  assert.equal(l.isPaused(), false);
+  const snap = l.snapshot(c, day, P);
+  // The unsettled 20000 rides on top of the official reading (conservative).
+  assert.equal(snap.effective_used, 100000 + 20000 + 10000);
+  admit(l, 'after', 10);
   l.close();
 });
 
@@ -173,15 +172,17 @@ test('new UTC day starts independent observations', () => {
   l.close();
 });
 
-// 16. Prior-day UNKNOWN still blocks the new day after reset.
-test('prior-day UNKNOWN survives UTC reset without release', () => {
+// 16. Prior-day UNKNOWN is carried as a bounded reserve; history retained.
+test('prior-day UNKNOWN carries its reserve without blocking the new day', () => {
   const l = verifiedLedger(), c = cfg(), oldDay = '2026-01-01';
   l.publishSharedUsage(oldDay, { premium: 0, economy: 0 }, { premium: 0, economy: 0 }, new Date('2026-01-01T10:00:00Z'));
   l.admit(c, { key: 'stuck', hash: 'x', requestId: 'x', model: c.quotas.premium.models[0], group: P, day: oldDay, reserve: 100, now: new Date('2026-01-01T10:00:30Z') });
   l.unknown('stuck');
-  // A fresh new-day shared baseline does NOT release the old UNKNOWN.
+  // A fresh new-day shared baseline restores admission with the 100-token
+  // upper bound carried automatically — no review, no waiting period.
   l.publishSharedUsage(day, { premium: 0, economy: 0 }, { premium: 0, economy: 0 });
-  assert.throws(() => admit(l, 'newday', 10), (e: any) => e.code === 'FREE_QUOTA_UNVERIFIED');
+  assert.equal(l.snapshot(c, day, P).cross_day_carry, 100);
+  admit(l, 'newday', 10);
   assert.equal(l.find('stuck')?.state, 'UNKNOWN');
   l.close();
 });
