@@ -116,29 +116,33 @@ export class Ledger {
     return createHash('sha256').update(canonical).digest('hex');
   }
   verifyPolicy(config: Config): void {
-    const next = this.policyHash(config);
-    const legacy = this.legacyPolicyHash(config);
     // The whole decision runs inside one IMMEDIATE transaction so concurrent
     // proxy+collector boots cannot double-migrate: the loser re-reads the
     // winner's fingerprint and returns via the first branch (idempotent).
     this.tx(() => {
-      const old = this.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as any;
-      if (old && old.sha256 === next) return;
-      // Painless upgrade: a stored pre-shared-accounting fingerprint that
-      // differs from the current config in exactly the reserve addition is
-      // adopted automatically, with an immutable audit row. History-preserving
-      // and verifiable via accounting_migration_audit. Any other drift fails closed.
-      if (old && old.sha256 === legacy && old.sha256 !== next) {
-        this.db.prepare('UPDATE policy_fingerprint SET sha256=? WHERE id=1').run(next);
-        this.db.prepare(`INSERT INTO accounting_migration_audit
-          (operator,evidence,effective_utc_day,from_fingerprint,to_fingerprint,created_at)
-          VALUES(?,?,?,?,?,?)`).run('auto-upgrade',
-          'Automatic in-place adoption of shared-org accounting: stored policy differs from current config only by the externalSafetyReserve addition; reservations, observations, idempotency keys and pause state preserved.',
-          utcDay(), old.sha256, next, new Date().toISOString());
-        return;
-      }
-      throw new LedgerError('POLICY_CHANGED', 'Uninitialized or changed policy; operator reconciliation required');
+      if (!this.adoptIfCompatibleLocked(config))
+        throw new LedgerError('POLICY_CHANGED', 'Uninitialized or changed policy; operator reconciliation required');
     });
+  }
+  /** Must be called inside a write transaction. Advances a stored
+   * pre-shared-accounting fingerprint that differs from the current config
+   * in exactly the reserve addition, with an immutable audit row — the
+   * painless, history-preserving upgrade both boot paths share. Returns
+   * whether the stored fingerprint now matches the current policy. */
+  private adoptIfCompatibleLocked(config: Config): boolean {
+    const old = this.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as any;
+    const next = this.policyHash(config);
+    if (old && old.sha256 === next) return true;
+    if (old && old.sha256 === this.legacyPolicyHash(config) && old.sha256 !== next) {
+      this.db.prepare('UPDATE policy_fingerprint SET sha256=? WHERE id=1').run(next);
+      this.db.prepare(`INSERT INTO accounting_migration_audit
+        (operator,evidence,effective_utc_day,from_fingerprint,to_fingerprint,created_at)
+        VALUES(?,?,?,?,?,?)`).run('auto-upgrade',
+        'Automatic in-place adoption of shared-org accounting: stored policy differs from current config only by the externalSafetyReserve addition; reservations, observations, idempotency keys and pause state preserved.',
+        utcDay(), old.sha256, next, new Date().toISOString());
+      return true;
+    }
+    return false;
   }
   /** Pre-shared-accounting fingerprint (no externalSafetyReserve). Used ONLY
    * by the audited in-place migration to prove the stored policy differs
@@ -187,6 +191,10 @@ export class Ledger {
   assertPolicy(config: Config): void {
     const hash = this.policyHash(config);
     this.tx(() => {
+      // Boot path shares the painless upgrade: a compatible legacy
+      // fingerprint is adopted automatically (audited, idempotent), so a
+      // version upgrade never strands the service at POLICY_CHANGED.
+      if (this.adoptIfCompatibleLocked(config)) return;
       const old = this.db.prepare('SELECT sha256 FROM policy_fingerprint WHERE id=1').get() as any;
       if (old && old.sha256 !== hash) throw new LedgerError('POLICY_CHANGED', 'Model/quota/project policy changed: operator reconciliation required');
       if (!old) {
