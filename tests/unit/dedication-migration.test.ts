@@ -187,3 +187,26 @@ test('concurrent boots auto-adopt exactly once', () => {
     } finally { a.close(); b.close(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('boot path assertPolicy auto-adopts legacy fingerprints too', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qf-boot-adopt-'));
+  const path = join(dir, 'guard.sqlite');
+  try {
+    const c = cfg();
+    const setup = new Ledger(path);
+    try {
+      setup.assertPolicy(c);
+      setup.db.prepare('UPDATE policy_fingerprint SET sha256=? WHERE id=1').run(setup.legacyPolicyHash(c));
+    } finally { setup.close(); }
+    const l = new Ledger(path, { recoverPending: false });
+    try {
+      // This is the exact proxy/collector boot call: it must not strand.
+      assert.doesNotThrow(() => l.assertPolicy(c));
+      assert.equal((l.db.prepare('SELECT COUNT(*) AS n FROM accounting_migration_audit').get() as any).n, 1);
+      // Unrelated drift still fails closed on the boot path.
+      const drifted = structuredClone(c);
+      drifted.policy.safetyPct = 50;
+      assert.throws(() => l.assertPolicy(drifted), (e: any) => e.code === 'POLICY_CHANGED');
+    } finally { l.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
