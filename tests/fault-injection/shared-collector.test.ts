@@ -154,3 +154,20 @@ test('quota endpoint exposes shared fields and nulls, keeps OMP error contract',
     if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey;
   }
 });
+
+// Duplicate usage cells (same model+project twice in one cycle) refuse
+// rather than double-count.
+test('duplicate usage cells across pages fail closed without publishing', async () => {
+  const c = cfg(), l = new Ledger(':memory:');
+  const dup = proxyRow(c, 5);
+  const first = { object: 'page', data: [{ object: 'bucket', start_time: utcStart, end_time: end, results: [dup] }], has_more: true, next_page: 'p2' };
+  const second = bucket([dup]);
+  let calls = 0;
+  const pages = [first, second];
+  const fetchImpl = (async () => new Response(JSON.stringify(pages[calls++]), { status: 200 })) as typeof fetch;
+  try {
+    await assert.rejects(() => collectOnce(c, l, { fetchImpl, adminKey: 'fake' }), /Duplicate usage cell/);
+    assert.equal(l.observation(day, 'premium'), undefined);
+    assert.equal(l.isPaused(), true);
+  } finally { l.close(); }
+});

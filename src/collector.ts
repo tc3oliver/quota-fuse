@@ -1,6 +1,6 @@
 import type { Config, Group } from './config.ts';
 import { utcDay, unrestrictedModels } from './config.ts';
-import { Ledger } from './ledger.ts';
+import { Ledger, LedgerError } from './ledger.ts';
 import { groupForUnrestrictedModel } from './model-groups.ts';
 
 export interface CollectOptions { fetchImpl?: typeof fetch; now?: Date; adminKey?: string }
@@ -78,10 +78,11 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
               : openMode ? 'premium' : groups.get(row.model);
           if (!group) throw new Error('Model outside the optional whitelist observed in org usage');
           if (!whole(row.input_tokens) || !whole(row.output_tokens)) throw new Error('Untrustworthy official token count');
-          // Cross-page duplicate guard: same (model, project) cell seen twice
-          // in one collection cycle indicates overlapping pagination.
+          // Cross-page duplicate guard: the same (model, project) cell twice
+          // in one collection cycle indicates overlapping pagination or a
+          // malformed aggregate. Refuse rather than double-count.
           const cell = `${row.model}\u0000${row.project_id}`;
-          if (seenRows.has(cell) && index > 0) throw new Error('Duplicate usage cell across pages');
+          if (seenRows.has(cell)) throw new Error('Duplicate usage cell across pages');
           seenRows.add(cell);
           const tokens = row.input_tokens + row.output_tokens;
           if (!Number.isSafeInteger(tokens)) throw new Error('Overflow in usage sum');
@@ -109,8 +110,10 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
   } catch (e) {
     // Set/preserve paused state even for mid-pagination or authentication failures.
     // Never clobber MANUAL_REVIEW or a prior accounting-invariant failure.
-    // Never treat failure as zero usage: watermarks are untouched.
-    const code = e instanceof Error ? (/^[A-Z_]{1,60}$/.test(e.message) ? e.message : 'COLLECTOR_UNVERIFIED') : 'COLLECTOR_UNVERIFIED';
+    // Never treat failure as zero usage: watermarks are untouched. Preserve
+    // the machine-readable cause (LedgerError code) for poll diagnostics.
+    const code = e instanceof LedgerError ? e.code
+      : e instanceof Error ? (/^[A-Z_]{1,60}$/.test(e.message) ? e.message : 'COLLECTOR_UNVERIFIED') : 'COLLECTOR_UNVERIFIED';
     try {
       for (const group of ['premium', 'economy'] as const) {
         try { ledger.recordPollAttempt(day, group, attemptAt, code); } catch { /* diagnostics only */ }
