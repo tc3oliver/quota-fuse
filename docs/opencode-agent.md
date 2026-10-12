@@ -104,10 +104,10 @@ must explicitly supply the `public` header as shown above.
 ## Billing caveat
 
 Local function declarations/arguments/results consume ordinary model tokens and
-go through the same allowlist, preflight, reservation and collector gates, but
-**whether these tokens qualify for the Data Sharing incentive is unconfirmed**
-(the offer excludes "tool use" without clarifying client-side function calls).
-A 2026-10-12 live experiment confirmed incentive-tier placement (not zero charge;
-Costs pending — see [billing validation](billing-validation.md)). Adapter
-admission is not proof of zero cost. Complete
+go through the same allowlist, preflight, reservation and collector gates.
+**Status PROVISIONAL_PASS:** a 2026-10-12 live experiment verified incentive-tier
+placement for local function calls on the tested model (see [billing
+validation](billing-validation.md)); final Costs reconciliation is pending with
+operator-accepted residual risk. Use local agent functions normally — no extra
+user confirmation needed. Adapter admission is not proof of zero cost. Complete
 [docs/billing-validation.md](billing-validation.md) before any live traffic.
