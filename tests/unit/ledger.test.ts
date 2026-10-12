@@ -15,17 +15,17 @@ test('default deny absent official observation',()=> {
   const l = new Ledger(':memory:');
   assert.throws(()=> reserve(l,cfg(),100,'noreading'), (e:any)=>e.code==='FREE_QUOTA_UNVERIFIED');l.close();
 });
-test('premium 85% cap includes pending reservations',()=> {
-  const l=verifiedLedger(),c=cfg();reserve(l,c,850000,'top');
+test('premium 85% cap includes pending reservations and external reserve',()=> {
+  const l=verifiedLedger(),c=cfg();reserve(l,c,840000,'top');
   assert.equal(l.snapshot(c,day,'premium').estimated_remaining,0);
   assert.throws(()=>reserve(l,c,1,'overflow'),(e:any)=>e.code==='FREE_QUOTA_EXHAUSTED');l.close();
 });
 test('economy cap is 8.5M not per model',()=> {
-  const l=verifiedLedger(),c=cfg(); reserve(l,c,8500000,'big','economy');
+  const l=verifiedLedger(),c=cfg(); reserve(l,c,8400000,'big','economy');
   assert.throws(()=>reserve(l,c,1,'no','economy'),(e:any)=>e.code==='FREE_QUOTA_EXHAUSTED');l.close();
 });
 test('two agents racing remaining 50K do not double admit',async()=> {
-  const l=verifiedLedger(),c=cfg();reserve(l,c,800000,'spent');
+  const l=verifiedLedger(),c=cfg();reserve(l,c,790000,'spent');
   const results=await Promise.allSettled([Promise.resolve().then(()=>reserve(l,c,50000,'agent-a')),Promise.resolve().then(()=>reserve(l,c,50000,'agent-b'))]);
   assert.equal(results.filter(r=>r.status==='fulfilled').length,1);l.close();
 });
@@ -47,13 +47,14 @@ test('duplicate idempotency key denies replay including completed',()=> {
   assert.throws(()=>reserve(l,c,100,'same'),(e:any)=>e.code==='DUPLICATE_REQUEST');l.close();
 });
 test('watermark regression is rejected, remaining unchanged',()=> {
-  const l=new Ledger(':memory:'),c=cfg();l.recordObservation(day,'premium',1000);
-  assert.throws(()=>l.recordObservation(day,'premium',999),(e:any)=>e.code==='OFFICIAL_WATERMARK_REGRESSION');
+  const l=new Ledger(':memory:'),c=cfg();
+  l.publishSharedUsage(day,{premium:1000,economy:0},{premium:0,economy:0});
+  assert.throws(()=>l.publishSharedUsage(day,{premium:999,economy:0},{premium:0,economy:0}),(e:any)=>e.code==='OFFICIAL_WATERMARK_REGRESSION');
   assert.equal(l.snapshot(c,day,'premium').official_observed,1000);l.close();
 });
 test('cross-day UNKNOWN causes next day fail-closed',()=> {
   const l=verifiedLedger(),c=cfg(),oldDay='2026-01-01';
-  l.recordObservation(oldDay,'premium',0,new Date('2026-01-01T11:59:00Z'));
+  l.publishSharedUsage(oldDay,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-01T11:59:00Z'));
   l.admit(c,{key:'yesterday',hash:'x',requestId:'x',model:c.quotas.premium.models[0],group:'premium',day:oldDay,reserve:100,now:new Date('2026-01-01T12:00:00Z')});
   l.unknown('yesterday');
   assert.throws(()=>reserve(l,c,50,'new'),(e:any)=>e.code==='FREE_QUOTA_UNVERIFIED');l.close();
@@ -68,7 +69,7 @@ test('opening readonly collector does not alter in-flight proxy reservations',()
   const dir=mkdtempSync(join(tmpdir(),'qg-proxy-'));
   try {
     const path=join(dir,'guard.sqlite'),c=cfg(),l=new Ledger(path);
-    l.recordObservation(day,'premium',0);l.recordObservation(day,'economy',0);l.setPause(null);
+    l.publishSharedUsage(day,{premium:0,economy:0},{premium:0,economy:0});
     reserve(l,c,100,'active');
     const collector=new Ledger(path,{recoverPending:false});
     assert.equal(collector.find('active')?.state,'PENDING');collector.close();l.close();
@@ -93,25 +94,25 @@ test('collector pause inside atomic admit denies without a reservation',()=> {
 });
 test('previous-day PENDING blocks new-day admission, not just UNKNOWN',()=> {
   const l=verifiedLedger(),c=cfg(),oldDay='2026-01-01';
-  l.recordObservation(oldDay,'premium',0,new Date('2026-01-01T10:00:00Z'));
-  l.admit(c,{key:'unsettled-old',hash:'x',requestId:'old',model:c.quotas.premium.models[0],group:'premium',day:oldDay,reserve:100,now:new Date('2026-01-01T10:00:00Z')});
+  l.publishSharedUsage(oldDay,{premium:0,economy:0},{premium:0,economy:0},new Date('2026-01-01T10:00:00Z'));
+  l.admit(c,{key:'unsettled-old',hash:'x',requestId:'old',model:c.quotas.premium.models[0],group:'premium',day:oldDay,reserve:100,now:new Date('2026-01-01T10:00:30Z')});
   assert.throws(()=>reserve(l,c,100,'new-day'),(e:any)=>e.code==='FREE_QUOTA_UNVERIFIED');
   l.close();
 });
 
 test('official baseline plus local settled is not hidden by later stale official observation',()=> {
   const l=new Ledger(':memory:'),c=cfg();
-  l.recordObservation(day,'premium',700000);
-  l.recordObservation(day,'economy',0);l.setPause(null);
+  l.publishSharedUsage(day,{premium:700000,economy:0},{premium:0,economy:0});
   reserve(l,c,100000,'post-baseline');
   l.prepareDispatch(c,'post-baseline',98240,1744);
   l.complete('post-baseline',100000);
   assert.equal(l.snapshot(c,day,'premium').baseline_observed,700000);
-  assert.equal(l.snapshot(c,day,'premium').estimated_remaining,50000);
-  assert.throws(()=>reserve(l,c,50001,'would-charge'),(e:any)=>e.code==='FREE_QUOTA_EXHAUSTED');
+  // effective = 0 external + max(700000, 700000+100000) + 10000 reserve = 810000
+  assert.equal(l.snapshot(c,day,'premium').estimated_remaining,40000);
+  assert.throws(()=>reserve(l,c,40001,'would-charge'),(e:any)=>e.code==='FREE_QUOTA_EXHAUSTED');
   // Later official aggregate contains those tokens; must not double count.
-  l.recordObservation(day,'premium',800000);
-  assert.equal(l.snapshot(c,day,'premium').estimated_remaining,50000);
+  l.publishSharedUsage(day,{premium:800000,economy:0},{premium:0,economy:0});
+  assert.equal(l.snapshot(c,day,'premium').estimated_remaining,40000);
   l.close();
 });
 
@@ -177,7 +178,7 @@ test('read-only quota access never migrates, recovers, or modifies pending reser
   const path=join(dir,'guard.sqlite');
   try {
     const l=new Ledger(path),c=cfg();l.assertPolicy(c);
-    l.recordObservation(day,'premium',0);l.recordObservation(day,'economy',0);l.setPause(null);
+    l.publishSharedUsage(day,{premium:0,economy:0},{premium:0,economy:0});
     reserve(l,c,1000,'inflight');l.close();
     const reader=new Ledger(path,{readOnly:true});
     reader.verifyPolicy(c);
@@ -190,10 +191,14 @@ test('read-only quota access never migrates, recovers, or modifies pending reser
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
-test('unexpected official usage beyond baseline plus local upper bound is rejected',()=>{
+test('external org usage above local ledger is recorded, not an invariant failure',()=>{
  const l=verifiedLedger(),c=cfg();
- reserve(l,c,100,'only-local-traffic');
- assert.throws(()=>l.recordObservation(day,'premium',101),(e:any)=>e.code==='UNACCOUNTED_OFFICIAL_USAGE');
- assert.equal(l.observation(day,'premium')?.official_high_watermark,0);
+ // External production traffic legitimately exceeds everything local.
+ l.publishSharedUsage(day,{premium:0,economy:0},{premium:500000,economy:0});
+ assert.equal(l.isPaused(),false);
+ assert.equal(l.snapshot(c,day,'premium').official_external_usage,500000);
+ assert.equal(l.snapshot(c,day,'premium').state,'READY');
+ // ...and it tightens admission instead of locking the collector.
+ assert.throws(()=>reserve(l,c,340001,'too-big'),(e:any)=>e.code==='FREE_QUOTA_EXHAUSTED');
  l.close();
 });

@@ -11,16 +11,14 @@ const evidence='response log request ID req_xyz confirms status incomplete at 11
 function setup(phase:'DISPATCHED'|'PREFLIGHT'='DISPATCHED') {
   const l=new Ledger(':memory:'),c=cfg();
   l.assertPolicy(c);
-  l.recordObservation(oldDay,'premium',0,new Date(oldDay+'T11:00:00Z'));
-  l.setPause(null);
+  l.publishSharedUsage(oldDay,{premium:0,economy:0},{premium:0,economy:0},new Date(oldDay+'T11:00:00Z'));
   l.admit(c,{key:'live-trial-000001',hash:'hash-test',requestId:'req-unique',
     model:c.quotas.premium.models[0],group:'premium',day:oldDay,
     reserve:280,now:new Date(oldDay+'T11:00:01Z')});
   if(phase==='DISPATCHED')l.prepareDispatch(c,'live-trial-000001',7,257,new Date(oldDay+'T11:00:02Z'));
   l.unknown('live-trial-000001');
   l.db.prepare('UPDATE reservations SET updated_at=? WHERE idempotency_key=?').run('2025-01-01T11:00:10.000Z','live-trial-000001');
-  l.recordObservation(audited,'premium',0,new Date(audited+'T10:00:00Z'));
-  l.recordObservation(audited,'economy',0,new Date(audited+'T10:00:00Z'));
+  l.publishSharedUsage(audited,{premium:0,economy:0},{premium:0,economy:0},new Date(audited+'T10:00:00Z'));
   l.setPause('MANUAL_REVIEW');
   return {l,c};
 }

@@ -7,12 +7,12 @@ export function cfg(): Config {
     server: { host:'127.0.0.1', port:0, storage:':memory:', maxRequestBytes:102400, maxConcurrentRequests:4 },
     upstream: { baseUrl:'https://api.openai.com/v1' },
     dataSharing: { projectId:'proj_test', tier:'launch' },
-    policy: { mode:'FREE_ONLY', safetyPct:85, maxOutputTokens:4096, accountMargin:16, inputCounter:'responses_preflight', preflightCostVerified:true, eligibilityAttestedUntil:future, exclusiveOrgTrafficAttestedUntil:future, manualCostsAuditedUntil:future, reconcileMaxAgeSeconds:600 },
+    policy: { mode:'FREE_ONLY', safetyPct:85, maxOutputTokens:4096, accountMargin:16, inputCounter:'responses_preflight', preflightCostVerified:true, eligibilityAttestedUntil:future, exclusiveOrgTrafficAttestedUntil:future, manualCostsAuditedUntil:future, reconcileMaxAgeSeconds:600, externalSafetyReserve:{premium:10000,economy:100000} },
     quotas: { premium:{dailyTokens:1000000,models:['gpt-test-2026-10-11']}, economy:{dailyTokens:10000000,models:['gpt-test-mini-2026-10-11']} }
   });
 }
 export function verifiedLedger(): Ledger {
   const l = new Ledger(':memory:');
-  l.recordObservation(day,'premium',0); l.recordObservation(day,'economy',0); l.setPause(null);
+  l.publishSharedUsage(day, { premium: 0, economy: 0 }, { premium: 0, economy: 0 });
   return l;
 }

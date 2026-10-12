@@ -136,7 +136,7 @@ try {
   const eligible = projectValid(c.dataSharing.projectId);
   const proxyKey = keyPresent('OPENAI_API_KEY','.env.proxy');
   const adminKey = keyPresent('OPENAI_ADMIN_KEY','.env.collector');
-  const future = ['eligibilityAttestedUntil','exclusiveOrgTrafficAttestedUntil','manualCostsAuditedUntil']
+  const future = ['eligibilityAttestedUntil','manualCostsAuditedUntil']
     .every(k => typeof c.policy[k] === 'string' && Date.parse(c.policy[k]) > Date.now());
   console.log('\nQuotaFuse setup (' + (doctor ? 'read-only' : 'offline') + ')');
   console.log('  Data Sharing scope: All projects OR Selected projects; this must already cover the routing Project.');
@@ -163,10 +163,11 @@ try {
   if (!c.policy.preflightCostVerified) pending.push('PREFLIGHT_COST_UNVERIFIED — do not enable without evidence');
   for (const [key,description] of [
     ['eligibilityAttestedUntil','ELIGIBILITY_ATTESTATION_MISSING'],
-    ['exclusiveOrgTrafficAttestedUntil','TRAFFIC_ISOLATION_UNVERIFIED'],
     ['manualCostsAuditedUntil','COST_AUDIT_UNVERIFIED']]) {
     if (!c.policy[key] || Date.parse(c.policy[key]) <= Date.now()) pending.push(description + ' — use existing evidence if still valid');
   }
+  if (!c.policy.externalSafetyReserve || !Number.isSafeInteger(c.policy.externalSafetyReserve.premium) || !Number.isSafeInteger(c.policy.externalSafetyReserve.economy))
+    pending.push('EXTERNAL_RESERVE_MISSING — configure per-group externalSafetyReserve bounds');
   if (pending.length) {
     console.log('  Pending prerequisites:');
     for (const issue of pending) console.log('    - '+issue);
@@ -179,7 +180,9 @@ try {
   console.log('  Official eligible model groups: ' + MODEL_DOC);
   if (unfiltered) console.log('  WARNING: Unfiltered model IDs are NOT verified complimentary. ' +
     'Unknown models use Premium; official-group mapping (if enabled) does not prove free eligibility; unsupported/paid models could incur charges.');
-  console.log('  QuotaFuse currently routes ONE project; other-project usage may PAUSE the collector.');
+  console.log('  External safety reserve: premium ' + c.policy.externalSafetyReserve.premium.toLocaleString() +
+    ', economy ' + c.policy.externalSafetyReserve.economy.toLocaleString() + ' (conservative bound for bypass traffic during stats delay).');
+  console.log('  QuotaFuse routes ONE project; other-project usage shares the org pool and tightens admission (never pauses collection).');
   console.log('  No API calls, billing attestation changes, or secret disclosures were made.');
 } catch (error) {
   console.error('Onboarding stopped safely: ' + error.message);

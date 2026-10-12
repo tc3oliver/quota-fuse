@@ -97,10 +97,13 @@ export function makeServer(config: Config, ledger: Ledger, opts: ServeOptions = 
         catch { return writeJson(res, 503, { status: 'paused_unverified', reasons: readinessIssues(config, ledger, now) }); }
       }
       if (req.method === 'GET' && path === '/quota') {
-        const guarded = (() => { try { gate(config, ledger, now); return true; } catch { return false; } })();
+        // Conservative admission estimate, NOT an official free-balance promise.
+        // Unknown figures are returned as null, never fabricated as zero.
+        const pause = (() => { try { return ledger.pauseReason(); } catch { return 'LEDGER_UNAVAILABLE'; } })();
         const groups = (['premium','economy'] as const).map(g => {
           const snap = ledger.snapshot(config, utcDay(now), g, now);
-          return { ...snap, state: guarded ? snap.state : 'PAUSED_UNVERIFIED', confidence: guarded ? snap.confidence : 'UNVERIFIED', estimated_remaining: guarded ? snap.estimated_remaining : 0 };
+          const held = pause !== null && pause !== undefined;
+          return { ...snap, state: held ? (pause === 'MANUAL_REVIEW' ? 'MANUAL_HOLD' : 'PAUSED_UNVERIFIED') : snap.state, confidence: held ? 'UNVERIFIED' : snap.confidence, estimated_remaining: held ? 0 : snap.estimated_remaining, pause_reason: pause ?? null };
         });
         return writeJson(res, 200, { groups });
       }

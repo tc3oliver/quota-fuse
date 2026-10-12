@@ -102,3 +102,9 @@ Both processes must be stopped and the operator must take durable backups.
 See [recovery runbook](runbook.md#audited-legacy-to-official-group-accounting-upgrade).
 There is no auto-migration or history deletion. New installations default to
 `official_v1` without requiring a model whitelist.
+
+Existing `config.json` files without `policy.externalSafetyReserve` are
+likewise **NOT** silently defaulted: admission requires an explicit
+per-group conservative bound for external-service consumption during stats
+delay. Add the bounds, then follow the [shared-accounting cutover](runbook.md#cutover-to-organization-shared-accounting)
+(new database file at a UTC boundary; old file retained as audit archive).

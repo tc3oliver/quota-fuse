@@ -16,7 +16,7 @@
 | Upstream ambiguous response / stream disconnect / restart | Keep reservation `UNKNOWN` forever until explicitly reviewed; never auto replay |
 | Admin API stale or unavailable | Persist pause on collector error; checkpoint age gate, exclusive collector lock |
 | Watermark goes backwards | Reject regression and pause collector |
-| Bypass by other org projects | Manual exclusive-org attestation plus collector reject foreign-project rows; cannot prevent bypass at OpenAI |
+| Bypass by other org projects | External scope recorded + `externalSafetyReserve` bound; collector never stops on bypass traffic; cannot prevent bypass at OpenAI |
 | Prompt or output contains private data | All clients MUST attest `public`; **no reliable automated sensitive-data detection in v0.1** |
 | Header spoofing / arbitrary URL SSRF | Fixed upstream origin, no redirects, server-generated auth headers, local host binding |
 | Hostile local process | Bearer token; local network access alone is not authorization; operating-system file permissions and secret storage remain operator tasks |
@@ -24,7 +24,7 @@
 | Unexpected price outside proxy | External account budget limits and cost alerting remain necessary; not guaranteed hard stops |
 | Malicious config | Config admin is a trust boundary; changing allowlist or attestations intentionally grants privileges |
 
-The collector summarizes **organization usage**, which is not a real-time incentive-reservation API. `max(latest_official, initial_observed_baseline + all subsequent locally settled and outstanding reservations)` is conditional on a **complete independently validated baseline**, exclusive control of all eligible organization traffic after that baseline, and ongoing monitoring. Admin Usage cannot prove these preconditions or report an atomic complimentary balance. It is **not valid for uncontrolled external parallel traffic**. A request crossing the threshold may be billed as a whole. This proxy is a risk-reduction device, not a billing enforcement primitive supplied by the provider.
+The collector summarizes **organization usage**, which is not a real-time incentive-reservation API. `effective_used = official_external + max(official_proxy, verified_proxy_baseline + proxy_local_committed) + external_safety_reserve` is conditional on a **complete independently validated baseline** for both scopes, a credible external-traffic bound, and ongoing monitoring. Admin Usage cannot prove these preconditions or report an atomic complimentary balance. Under unbounded external traffic it cannot guarantee zero fees. A request crossing the threshold may be billed as a whole. This proxy is a risk-reduction device, not a billing enforcement primitive supplied by the provider.
 
 ## Lifecycle
 

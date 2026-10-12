@@ -64,7 +64,10 @@ Review OpenAI's [Data Sharing program and eligible models](https://help.openai.c
 before allowing billable live inference. An **All projects** enrollment
 does not require a specially enrolled Project, but QuotaFuse still needs
 **one existing routing Project ID**, and the shared incentive is
-organization-wide. Cross-project usage may pause the current collector.
+organization-wide. **Other production services may legally call OpenAI
+directly without passing QuotaFuse; their usage shares the same org pool
+and tightens QuotaFuse admission. It never pauses the collector.**
+QuotaFuse must never be given a reason to interrupt those services.
 
 ## Run
 
@@ -103,9 +106,13 @@ npm run demo
 - [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 **Technical preview:** QuotaFuse cannot atomically query the official remaining
-complimentary balance. In the absence of independently confirmed enrollment,
-project traffic isolation, input-counter billing behavior and collector health,
-it fails closed; there is no automatic paid OpenAI fallback.
+complimentary balance. It fails closed without independently confirmed
+enrollment, input-counter billing behavior and collector health; there is
+no automatic paid OpenAI fallback. The collector polls organization usage
+every 120s, but official statistics may lag, so admission adds a configured
+`externalSafetyReserve` per group and `estimated_remaining` is a
+conservative local admission estimate — never an official free-balance
+promise, and never a zero-fee guarantee under unbounded external traffic.
 
 QuotaFuse is an independent Apache-2.0 project, not affiliated with OpenAI.
 
@@ -121,3 +128,21 @@ See [UTC-day UNKNOWN review](docs/runbook.md#reviewed-dispatched-unknown-at-utc-
 Existing production Ledgers can switch to the published group mapping with
 [the explicit operator-reviewed new-day upgrade](docs/runbook.md#audited-legacy-to-official-group-accounting-upgrade).
 No automatic migration or resetting SQLite is performed.
+
+### Organization-shared accounting
+
+The org pool is shared with production services that bypass the proxy.
+Per UTC day and group, QuotaFuse tracks official proxy-scope usage,
+official external-scope usage, and local committed reservations, and admits only when:
+
+`effective_used = official_external + max(official_proxy, verified_proxy_baseline + proxy_local_committed) + external_safety_reserve`
+
+`remaining = max(0, floor(daily_limit × safety_pct) − effective_used)`
+
+Configure `policy.externalSafetyReserve` per group as the conservative
+upper bound for external consumption during official visibility delay plus
+the 120s poll interval. QuotaFuse only gates its own admissions; it never
+limits, stops, or modifies external services. Upgrading from a
+pre-shared-accounting release changes the policy fingerprint: cut over to a
+new database file at a UTC boundary (back up the old file as audit
+archive) — see the [runbook](docs/runbook.md).

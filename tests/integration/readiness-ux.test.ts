@@ -16,7 +16,7 @@ test('readiness issues describe missing counter, costs and operator evidence wit
    const issues=readinessIssues(c,ledger);
    for(const code of [
     'PREFLIGHT_COUNTER_DISABLED','PREFLIGHT_COST_UNVERIFIED',
-    'ELIGIBILITY_ATTESTATION_MISSING','TRAFFIC_ISOLATION_UNVERIFIED','COST_AUDIT_UNVERIFIED'
+    'ELIGIBILITY_ATTESTATION_MISSING','COST_AUDIT_UNVERIFIED'
    ])assert.ok(issues.includes(code),code);
    assert.ok(!JSON.stringify(issues).includes('sk-'));
  }finally{ledger.close();}

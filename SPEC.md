@@ -133,11 +133,12 @@ modelPolicy:
 
 ## 6. Quota Admission（最重要）
 
-每個 UTC 日、每個群組分別維護：`official_high_watermark`、`settled_local`、`pending_reserved`、`unknown_outcomes`、`admission_cap`、`last_reconciled_at`。
+每個 UTC 日、每個群組分別維護：`official_proxy`（路由專案官方累計）、`official_external`（其他專案官方累計）、`verified_proxy_baseline`（准入前已驗證的路由專案用量）、`proxy_local_committed`（已完成實際用量＋未結算預留上界）、`external_safety_reserve`（外部延遲消耗保守上界）、`admission_cap`、`last_successful_poll`。
 
 - `admission_cap = floor(dailyTokens * safetyPct / 100)`（預設 premium 850K、economy 8.5M）。
-- 使用**不重複加計**的保守對帳算法：以最新官方時間切點及對應本地交易水位為錨點；計入該切點以後新的本地已完成/預留用量；官方總量與本地高水位只能使用已證明不會漏記的合併公式，禁止把相同請求的官方計數與本地計數直接相加。
-- 即使官方 Usage API 落後，本地預留與未確定結果也不可釋放；官方觀測總量不得回退。
+- `effective_used = official_external + max(official_proxy, verified_proxy_baseline + proxy_local_committed) + external_safety_reserve`；`remaining = max(0, admission_cap − effective_used)`；僅當 `new_request_reservation ≤ remaining` 且觀測新鮮可信才准入。
+- 組織額度由所有符合條件的服務共享；外部服務可合法繞過 Proxy，其消耗只會收緊准入，絕不觸發 collector 停止。`official_total + all_local_usage` 的無條件相加（重複扣除）與 `max(official_total, local_usage)`（漏算未反映的本地預留）皆禁止。
+- 即使官方 Usage API 落後，本地預留與未確定結果也不可釋放；官方觀測總量不得回退；失敗的輪詢不得視為零用量。
 - `admit` 必須在 SQLite `BEGIN IMMEDIATE` 單交易中完成餘額檢查 + 預留寫入；所有執行中的 Agent 共享同一個 SQLite DB。
 - 估算 `reserve = trusted_input_count + effective_max_output_tokens + account_margin`；`max_output_tokens`（Responses）或 `max_completion_tokens`（Chat）須由 Proxy 強制上限；禁止省略及無界輸出。
 - Chat Completions 的 `n` 強制為 `1`；`max_completion_tokens` 包含隱藏推理 Token。Responses 同理包含隱藏輸出 Token。
@@ -170,12 +171,12 @@ try upstream_call_without_transparent_retries()
 
 ## 7. 帳務對帳與健康狀態
 
-- Admin Usage Collector 使用**獨立 Admin API Key** 查 `GET /v1/organization/usage/completions`，分組 `model,project_id`，依官方文件 pagination 完整取得資料；不能只看第一頁。
-- 來源包括：Org Usage API、Proxy 本地 Ledger、Dashboard/Costs 人工抽樣核對。
+- Admin Usage Collector 使用**獨立 Admin API Key** 查 `GET /v1/organization/usage/completions`，查詢**全組織**（分組 `model,project_id`，必要時以 `service_tier` 輔助驗證），依官方文件 pagination 完整取得資料；不能只看第一頁，不能只篩選路由專案。路由專案 scope 與外部 scope 分別統計後原子發布。
+- 來源包括：Org Usage API（全組織）、Proxy 本地 Ledger、Dashboard/Costs 人工抽樣核對。
 - `service_tier` 僅用於研究/對帳，不要在沒有正式實證前，把它當免費額度狀態的唯一真相。
-- 建立 checkpoint：UTC 日、觀測截止時間、模型群組統計、源資料版本、延遲與最後成功時間。
-- 官方資料落後、模型對應變動、資料分享資格被關閉、admin key 失效、帳務不一致、連線中斷：Provider 進入 `PAUSED_UNVERIFIED`，**不再放行**。
-- `GET /quota` 回傳 `group`, `utc_day`, `limit`, `safety_cap`, `admitted_reserved`, `local_settled`, `official_observed`, `estimated_remaining`, `confidence`, `last_reconciled_at`, `state`, `next_reset_at`。
+- 建立 checkpoint：UTC 日、官方截止時間、路由/外部群組統計、源資料版本、延遲與最後成功/嘗試時間。Collector 在 READY、EXHAUSTED、STALE、DATA_UNVERIFIED、MANUAL_HOLD 下都持續唯讀查詢；API 失敗保留前次有效資料，可恢復的暫停由下一次完整可信觀測自動恢復，人工暫停與真正的安全異常永不自動清除。
+- 官方資料落後、模型對應變動、資料分享資格被關閉、admin key 失效、帳務不一致、連線中斷：對應群組進入 `STALE` / `DATA_UNVERIFIED`，**不再放行**；外部服務正常消耗額度不在此列。
+- `GET /quota` 每群組回傳 `utc_day`, `official_org_usage`, `official_external_usage`, `official_proxy_usage`, `proxy_local_committed`, `proxy_pending_reserved`, `external_safety_reserve`, `effective_used`, `estimated_remaining`, `last_successful_poll`, `last_poll_attempt`, `observation_age_seconds`, `state`, `pause_reason`, `next_reset_at`（另保留舊欄位相容）。無法取得的數字回傳 null，不可用 0 假裝官方尚未使用。
 - `estimated_remaining` 不得標為「官方剩餘免費 Token」。
 - 啟用前必須人工檢查 Data Sharing enrollment、專案資格、當期 Dashboard/Costs；帳號正餘額亦為官方前提。
 
@@ -203,10 +204,11 @@ try upstream_call_without_transparent_retries()
 
 ```text
 READY -> (admit) PENDING -> COMPLETED
-                        -> UNKNOWN -> RECONCILED | MANUAL_REVIEW
+                    -> UNKNOWN -> RECONCILED | MANUAL_REVIEW
 READY -> (quota threshold) EXHAUSTED -> (UTC reset + verification) READY
-READY -> (usage/eligibility uncertain) PAUSED_UNVERIFIED
-PAUSED_UNVERIFIED -> (verification success) READY
+READY -> (usage/eligibility uncertain) STALE | DATA_UNVERIFIED
+STALE | DATA_UNVERIFIED -> (complete trusted observation) READY
+ANY -> (operator hold) MANUAL_HOLD -> (audited review only) READY
 ```
 
 - 程序重啟先掃描 PENDING，任何沒有可靠完成紀錄的 reservation 一律轉 UNKNOWN、保留 token。
@@ -234,7 +236,8 @@ usageCollector:
 
 policy:
   mode: FREE_ONLY
-  sharedOrgTrafficMode: DENY_UNLESS_VALIDATED
+  safetyPct: 85
+  externalSafetyReserve: { premium: 50000, economy: 200000 }
   rejectHostedTools: true
   rejectUnknownModels: true
   rejectUnverifiedInputCounts: true
@@ -280,7 +283,7 @@ Model Allowlist 必須由部署程序顯式審核填入，不能在原始碼內�
 15. 資料分享資格撤銷、專案設定變動：停止所有免費路由。
 16. 沒有 Proxy Token、非本機來源、header spoofing、任意 upstream path：拒絕。
 17. OMP 收到本地 429/503：切到**獨立 Provider**，不在 OpenAI Data Sharing 群組內循環重試。
-18. 其他 Org 專案有旁路流量時：依 `sharedOrgTrafficMode` 拒絕，不能只使用本地 Ledger 宣稱安全。
+18. 其他 Org 專案有旁路流量時：正確記錄為外部 scope 並收緊准入；collector 不得停止或報 invariant 錯誤。
 19. 透過測試帳務/人工 Dashboard 校對，確認免費標記與 Costs 沒有不預期項目；不能將 mock 成功誤當真實帳務保證。
 20. 進行故障注入測試：所有不確定狀態均有可追蹤的拒絕原因與恢復操作。
 
@@ -302,7 +305,7 @@ Model Allowlist 必須由部署程序顯式審核填入，不能在原始碼內�
 
 - Data Sharing enrollment 與實際優惠模型清單已驗證；每個群組上限正確。
 - API Token 估算在所有已允許請求形態上都有可信上界；不支援者會拒絕。
-- 無不受控的同 Org 旁路流量，或已確認風險並明確停用 FREE_ONLY 生產保證。
+- 無不受控且未設上界的同 Org 旁路流量（外部消耗需有 `externalSafetyReserve` 保守上界），或已明確停用 FREE_ONLY 生產保證。
 - 20 項測試通過；實際 Dashboard/Costs 對帳完成；未知結果會留在 ledger 而非被釋放。
 - 沒有 admin/upstream secret 洩漏；任何限制失效會 Fail Closed。
 - 文件明示 **「最小化意外扣款風險」，不承諾由 Proxy 單方面保證 OpenAI 帳戶零費用**。

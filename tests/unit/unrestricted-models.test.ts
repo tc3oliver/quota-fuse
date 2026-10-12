@@ -59,7 +59,7 @@ test('collector uses the same official group map despite deliberately reversed a
  }),{status:200})) as typeof fetch;
  const ledger=new Ledger(':memory:');
  try {
-   assert.deepEqual(await collectOnce(c,ledger,{fetchImpl,now,adminKey:'mock-admin-key'}),{premium:20,economy:7});
+   assert.deepEqual(await collectOnce(c,ledger,{fetchImpl,now,adminKey:'mock-admin-key'}),{proxy:{premium:20,economy:7},external:{premium:0,economy:0}});
    assert.equal(ledger.pauseReason(),null);
  }finally{ledger.close();}
 });
@@ -95,7 +95,7 @@ test('collector reconciles unfiltered model usage to Premium, never treats it as
  const ledger=new Ledger(':memory:');
  try{
    const result=await collectOnce(c,ledger,{fetchImpl,now,adminKey:'mock-admin-key'});
-   assert.deepEqual(result,{premium:24,economy:16});
+   assert.deepEqual(result,{proxy:{premium:24,economy:16},external:{premium:0,economy:0}});
    assert.equal(requests,1);
    assert.equal(ledger.pauseReason(),null);
  }finally{ledger.close();}

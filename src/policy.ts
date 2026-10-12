@@ -8,8 +8,12 @@ export class Denial extends Error {
 }
 export function gate(config: Config, ledger: Ledger, now = new Date()): void {
   const p = config.policy;
+  // Shared-org design: production services may legally bypass the proxy and
+  // share the org pool. exclusiveOrgTrafficAttestedUntil is therefore NOT a
+  // gate (kept in config only for backward compatibility). External usage
+  // tightens admission through effective_used instead of pausing collection.
   if (/^proj_(SELECT|REPLACE|YOUR|EXAMPLE)/i.test(config.dataSharing.projectId) ||
-      !attestedUntil(p.eligibilityAttestedUntil, now) || !attestedUntil(p.exclusiveOrgTrafficAttestedUntil, now) ||
+      !attestedUntil(p.eligibilityAttestedUntil, now) ||
       !attestedUntil(p.manualCostsAuditedUntil, now) || !process.env.OPENAI_API_KEY || !process.env.QG_PROXY_TOKEN || ledger.isPaused() ||
       !p.preflightCostVerified || p.inputCounter !== 'responses_preflight' || ledger.hasCrossDayUnknown(utcDay(now))) {
     throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', 'Production safety gates are not verified');
@@ -31,7 +35,6 @@ export function readinessIssues(config: Config, ledger: Ledger, now = new Date()
   if (p.inputCounter !== 'responses_preflight') issues.push('PREFLIGHT_COUNTER_DISABLED');
   if (!p.preflightCostVerified) issues.push('PREFLIGHT_COST_UNVERIFIED');
   if (!attestedUntil(p.eligibilityAttestedUntil, now)) issues.push('ELIGIBILITY_ATTESTATION_MISSING');
-  if (!attestedUntil(p.exclusiveOrgTrafficAttestedUntil, now)) issues.push('TRAFFIC_ISOLATION_UNVERIFIED');
   if (!attestedUntil(p.manualCostsAuditedUntil, now)) issues.push('COST_AUDIT_UNVERIFIED');
   try {
     const pause = ledger.pauseReason();
