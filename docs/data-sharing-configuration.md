@@ -47,7 +47,10 @@ Do not ask for model IDs. By default both model lists are empty:
 **Both model lists empty means no model-ID whitelist**, not that all models
 are eligible for the free Data Sharing offer. For fresh installs using `modelGroupAccounting: "official_v1"`, the
 Proxy and Collector independently map **exact documented** model IDs to
-Premium or Economy. All unknown IDs conservatively count against Premium.
+Premium or Economy. All unknown IDs — in any project — are recorded in
+`external_unknown_models` diagnostics and counted conservatively against
+**both** Premium and Economy admission estimates (a premium-only fallback
+would undercount Economy).
 Existing config without this versioned option keeps its prior Premium-only
 accounting and original SQLite policy fingerprint. **Neither mode proves
 a model is free.** This is conservative for

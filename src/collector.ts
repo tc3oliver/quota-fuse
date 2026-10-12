@@ -82,21 +82,32 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
           if (!Number.isSafeInteger(tokens)) throw new Error('Overflow in usage sum');
           const isProxy = row.project_id === config.dataSharing.projectId;
           let group: Group;
+          const legacyListed = !openMode && config.dataSharing.modelGroupAccounting !== 'official_v1' && allowlist.has(row.model);
           if (isProxy) {
             // Usage collection and admission filtering are SEPARATE duties.
             // The whitelist gates what the PROXY accepts; it never judges
-            // official usage rows. Any model in any project is classified by
-            // the reviewed official group map (legacy configs keep their
-            // operator-supplied groups), so a non-whitelisted model can never
-            // stop the collector. Unknown proxy models land in proxy Premium
-            // (conservative); unknown external models go to diagnostics.
-            group = !openMode && config.dataSharing.modelGroupAccounting !== 'official_v1' && allowlist.has(row.model)
-              ? allowlist.get(row.model)!
-              : openMode && config.dataSharing.modelGroupAccounting !== 'official_v1' && !isKnownModel(row.model)
-                ? 'premium'
-                : groupForUnrestrictedModel(row.model);
-            proxy[group] += tokens;
-            if (!Number.isSafeInteger(proxy[group])) throw new Error('Overflow in usage sum');
+            // official usage rows. Classification is identical in every
+            // project: legacy configs keep their operator-supplied groups,
+            // known models use the reviewed official map, and group-
+            // UNCONFIRMED models (any project) go to diagnostics with
+            // bilateral conservative counting by the ledger — never
+            // premium-only (that would undercount Economy), never assumed
+            // free, and never a reason to stop the collector.
+            if (legacyListed) {
+              group = allowlist.get(row.model)!;
+              proxy[group] += tokens;
+              if (!Number.isSafeInteger(proxy[group])) throw new Error('Overflow in usage sum');
+            } else if (!isKnownModel(row.model)) {
+              group = groupForUnrestrictedModel(row.model);
+              const prev = unknownModels[row.model];
+              const sum = (prev?.tokens ?? 0) + tokens;
+              if (!Number.isSafeInteger(sum)) throw new Error('Overflow in usage sum');
+              unknownModels[row.model] = { group, tokens: sum };
+            } else {
+              group = groupForUnrestrictedModel(row.model);
+              proxy[group] += tokens;
+              if (!Number.isSafeInteger(proxy[group])) throw new Error('Overflow in usage sum');
+            }
           } else {
             // External scope NEVER consults the admission whitelist: outside
             // services choose their own models. Classification always uses

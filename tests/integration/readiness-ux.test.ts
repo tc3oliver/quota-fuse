@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { makeServer } from '../../src/server.ts';
-import { readinessIssues } from '../../src/policy.ts';
+import { gate, readinessIssues } from '../../src/policy.ts';
 import { cfg, verifiedLedger } from '../helpers.ts';
 
 test('readiness issues describe missing counter and operator evidence without secrets',()=>{
@@ -26,6 +26,34 @@ test('readiness issues describe missing counter and operator evidence without se
    assert.ok(!issues.includes('PRIOR_DAY_UNKNOWN'));
    assert.ok(!JSON.stringify(issues).includes('sk-'));
  }finally{ledger.close();}
+});
+
+test('eligibility expiry stays fail-closed but warns 72h ahead, never auto-extends',()=>{
+ const ledger=verifiedLedger();
+ const oldToken=process.env.QG_PROXY_TOKEN,oldKey=process.env.OPENAI_API_KEY;
+ process.env.QG_PROXY_TOKEN='eligibility-test-token-1234567890123456';
+ process.env.OPENAI_API_KEY='sk-test-only';
+ try {
+   // Expiring soon: gate still passes, warning present (no surprise outage).
+   const soon=cfg() as any;
+   soon.policy.eligibilityAttestedUntil=new Date(Date.now()+3600000).toISOString();
+   assert.doesNotThrow(()=>gate(soon,ledger));
+   assert.ok(readinessIssues(soon,ledger).includes('ELIGIBILITY_ATTESTATION_EXPIRING'));
+   assert.ok(!readinessIssues(soon,ledger).includes('ELIGIBILITY_ATTESTATION_MISSING'));
+   // Far-future attestation: no warning, no missing.
+   const fresh=cfg();
+   assert.ok(!readinessIssues(fresh,ledger).includes('ELIGIBILITY_ATTESTATION_EXPIRING'));
+   // Expired: hard fail-closed, never admitted as free.
+   const expired=cfg() as any;
+   expired.policy.eligibilityAttestedUntil=new Date(Date.now()-1000).toISOString();
+   assert.throws(()=>gate(expired,ledger),(e:any)=>e.code==='FREE_QUOTA_UNVERIFIED');
+   assert.ok(readinessIssues(expired,ledger).includes('ELIGIBILITY_ATTESTATION_MISSING'));
+   assert.ok(!readinessIssues(expired,ledger).includes('ELIGIBILITY_ATTESTATION_EXPIRING'));
+ }finally{
+   ledger.close();
+   if(oldToken===undefined) delete process.env.QG_PROXY_TOKEN;else process.env.QG_PROXY_TOKEN=oldToken;
+   if(oldKey===undefined) delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=oldKey;
+ }
 });
 
 test('authenticated readiness endpoint returns actionable reason codes but not credentials',async()=>{

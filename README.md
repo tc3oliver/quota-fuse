@@ -155,9 +155,11 @@ down). Utilization cost, accepted deliberately: already-reflected settled
 tokens are deducted twice (safe direction — capacity can only shrink, never
 inflate). The `proxy_unreflected_tokens` snapshot field is removed.
 
-External unknown models (outside the reviewed official group map) form a
+Unknown models (outside the reviewed official group map, in **any** project —
+proxy or external) form a
 single group-independent daily total counted into **both** groups'
-`effective_used`, keeping each group's upper bound safe; confirmed groups
+`effective_used`, keeping each group's upper bound safe (a premium-only
+fallback would undercount Economy); confirmed groups
 are never double-subtracted, diagnostics are retained, and any safe-int
 overflow fails closed as `INVALID_USAGE`. `cross_day_carry` counts only
 **DISPATCHED-phase** prior-day unresolved reservations

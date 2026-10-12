@@ -122,19 +122,23 @@ test('missing day bucket and unattributable rows fail closed', async () => {
   } finally { l3.close(); }
 });
 
-test('proxy-scope unknown model is absorbed via official group map, never a failure', async () => {
+test('proxy-scope unknown model is counted bilaterally, never a failure', async () => {
   const c = cfg();
   // mystery-model is outside the proxy whitelist AND the reviewed official
-  // map: proxy scope classifies via the official map with unknown fallback
-  // to premium (2 tokens), and the collector keeps polling.
+  // map: it leaves per-group sums untouched, lands in diagnostics, and the
+  // ledger counts it in BOTH groups (an Economy-only accounting would miss
+  // it entirely). The collector keeps polling.
   const unknownModel = (async () => new Response(JSON.stringify(bucket([{ model: 'mystery-model', project_id: 'proj_test', input_tokens: 1, output_tokens: 1 }])), { status: 200 })) as typeof fetch;
   const l2 = new Ledger(':memory:');
   try {
     const result = await collectOnce(c, l2, { fetchImpl: unknownModel, adminKey: 'fake' });
-    assert.deepEqual(result, { proxy: { premium: 2, economy: 0 }, external: { premium: 0, economy: 0 }, unknownModels: {} });
+    assert.deepEqual(result, { proxy: { premium: 0, economy: 0 }, external: { premium: 0, economy: 0 }, unknownModels: { 'mystery-model': { group: 'premium', tokens: 2 } } });
     assert.equal(l2.isPaused(), false);
-    assert.equal(l2.observation(day, 'premium')?.official_high_watermark, 2);
+    assert.equal(l2.observation(day, 'premium')?.official_high_watermark, 0);
     assert.equal(l2.snapshot(c, day, 'premium').effective_used, 2 + 10000);
+    // Economy is not undercounted: the same 2 tokens bind its estimate too.
+    assert.equal(l2.snapshot(c, day, 'economy').effective_used, 2 + 100000);
+    assert.deepEqual(l2.snapshot(c, day, 'premium').external_unknown_models, [{ model: 'mystery-model', group: 'premium', tokens: 2 }]);
   } finally { l2.close(); }
 });
 
