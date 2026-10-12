@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Live billing experiment (interim, INCONCLUSIVE): 2026-10-12 real-API local-function-calling
+  evidence on `gpt-4.1-mini-2025-04-14` — incentive-tier placement confirmed for function-call
+  generation and tool-loop continuation (official Usage `incentivized-tier`), preflight verified
+  zero-usage, proxy loop settles correctly, hosted tools still rejected. Same-day Costs pending;
+  warnings retained until Costs confirm US$0.00 with no tool-execution charges.
 - Unknown models counted bilaterally in ANY project: proxy-scope group-unconfirmed rows no longer fall back to premium-only (that undercounted Economy). They leave per-group sums untouched, land in `external_unknown_models` diagnostics, and bind both groups' estimates. Legacy operator-listed groupings unchanged; known models classified exactly once.
 - Eligibility expiry stays fail-closed with a 72h `ELIGIBILITY_ATTESTATION_EXPIRING` warning: no programmatic Data Sharing enrollment check exists (verified against the Admin/Usage API surface), so the date cannot auto-extend and unknown eligibility is never assumed free. Layered protection documented instead: one-time attestation, fingerprint-bound project/tier, continuous usage monitoring, Dashboard costs review.
 - Lifecycle carry: `crossDayCarry` counts only DISPATCHED-phase prior-day unresolved reservations (PENDING/UNKNOWN/MANUAL_REVIEW, reviewed-day exemption aside) with `admitted_at ≥ day-00:00Z − 155000ms`. PREFLIGHT-phase rows provably consumed zero and never carry; window-overlapping days keep the full reserve (timeout alone releases nothing); only the daily deduction expires on window proof, history/idempotency preserved.

@@ -107,5 +107,7 @@ Local function declarations/arguments/results consume ordinary model tokens and
 go through the same allowlist, preflight, reservation and collector gates, but
 **whether these tokens qualify for the Data Sharing incentive is unconfirmed**
 (the offer excludes "tool use" without clarifying client-side function calls).
-Adapter admission is not proof of zero cost. Complete
+A 2026-10-12 live experiment confirmed incentive-tier placement (not zero charge;
+Costs pending — see [billing validation](billing-validation.md)). Adapter
+admission is not proof of zero cost. Complete
 [docs/billing-validation.md](billing-validation.md) before any live traffic.
