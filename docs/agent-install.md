@@ -48,6 +48,9 @@ asking a long questionnaire; do not stop at a plan.
 - **All projects:** The user already shares enabled data across their
   organization. Select **any existing** API Project as QuotaFuse's routing
   Project. Do not require a dedicated new Project.
+  Whichever existing Project is chosen, it must still be used **only** by
+  QuotaFuse afterwards (see proxy-project dedication); move any other
+  service out of it.
 - **Selected projects / single project:** Select **one of the Projects already
   opted into Data Sharing**. Never assume another Project is eligible solely
   because it belongs to the same Organization.
@@ -192,7 +195,9 @@ Fresh configs classify the 33 explicitly documented incentive model IDs
 into their respective groups, without a whitelist. Existing ledgers retain
 Premium-only accounting; **do not rewrite the policy fingerprint or migrate
 a running Ledger to the new `official_v1` mode**. Unknown models are not
-certified free. Other production services may share the org pool without
+certified free. The routing project must be dedicated to QuotaFuse and
+re-attested before expiry (`proxyProjectDedicatedAttestedUntil`); other
+production services may share the org pool without
 passing QuotaFuse — record their load in `policy.externalSafetyReserve`,
 never throttle them, and never treat their usage as a collector fault.
 Read [the recovery runbook](runbook.md#reviewed-dispatched-unknown-at-utc-rollover)

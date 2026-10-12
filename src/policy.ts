@@ -12,8 +12,13 @@ export function gate(config: Config, ledger: Ledger, now = new Date()): void {
   // share the org pool. exclusiveOrgTrafficAttestedUntil is therefore NOT a
   // gate (kept in config only for backward compatibility). External usage
   // tightens admission through effective_used instead of pausing collection.
+  // The routing project itself, however, MUST be dedicated to QuotaFuse: the
+  // max()-dedup is only sound when proxy-scope official usage can solely be
+  // locally committed traffic. Without fresh dedication evidence, admission
+  // fails closed rather than claiming safe dedup.
   if (/^proj_(SELECT|REPLACE|YOUR|EXAMPLE)/i.test(config.dataSharing.projectId) ||
       !attestedUntil(p.eligibilityAttestedUntil, now) ||
+      !attestedUntil(p.proxyProjectDedicatedAttestedUntil ?? null, now) ||
       !attestedUntil(p.manualCostsAuditedUntil, now) || !process.env.OPENAI_API_KEY || !process.env.QG_PROXY_TOKEN || ledger.isPaused() ||
       !p.preflightCostVerified || p.inputCounter !== 'responses_preflight' || ledger.hasCrossDayUnknown(utcDay(now))) {
     throw new Denial(503, 'FREE_QUOTA_UNVERIFIED', 'Production safety gates are not verified');
@@ -35,6 +40,7 @@ export function readinessIssues(config: Config, ledger: Ledger, now = new Date()
   if (p.inputCounter !== 'responses_preflight') issues.push('PREFLIGHT_COUNTER_DISABLED');
   if (!p.preflightCostVerified) issues.push('PREFLIGHT_COST_UNVERIFIED');
   if (!attestedUntil(p.eligibilityAttestedUntil, now)) issues.push('ELIGIBILITY_ATTESTATION_MISSING');
+  if (!attestedUntil(p.proxyProjectDedicatedAttestedUntil ?? null, now)) issues.push('PROXY_PROJECT_DEDICATION_UNVERIFIED');
   if (!attestedUntil(p.manualCostsAuditedUntil, now)) issues.push('COST_AUDIT_UNVERIFIED');
   try {
     const pause = ledger.pauseReason();

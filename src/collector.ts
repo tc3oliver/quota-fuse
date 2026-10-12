@@ -1,7 +1,7 @@
 import type { Config, Group } from './config.ts';
 import { utcDay, unrestrictedModels } from './config.ts';
 import { Ledger, LedgerError } from './ledger.ts';
-import { groupForUnrestrictedModel } from './model-groups.ts';
+import { groupForUnrestrictedModel, isKnownModel } from './model-groups.ts';
 
 export interface CollectOptions { fetchImpl?: typeof fetch; now?: Date; adminKey?: string }
 function whole(v: unknown): v is number { return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0; }
@@ -26,7 +26,7 @@ function whole(v: unknown): v is number { return typeof v === 'number' && Number
  * statistics may lag; admission adds externalSafetyReserve and never treats
  * the Usage API as a real-time free-balance oracle.
  */
-export async function collectOnce(config: Config, ledger: Ledger, options: CollectOptions = {}): Promise<{ proxy: Record<Group, number>; external: Record<Group, number> }> {
+export async function collectOnce(config: Config, ledger: Ledger, options: CollectOptions = {}): Promise<{ proxy: Record<Group, number>; external: Record<Group, number>; unknownModels: Record<string, { group: Group; tokens: number }> }> {
   const now = options.now ?? new Date();
   const day = utcDay(now);
   const attemptAt = now;
@@ -37,9 +37,13 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
     const end = Math.floor(now.getTime() / 1000);
     const proxy: Record<Group, number> = { premium: 0, economy: 0 };
     const external: Record<Group, number> = { premium: 0, economy: 0 };
+    const unknownModels: Record<string, { group: Group; tokens: number }> = {};
     if (end <= today) throw new Error('Collector must start after UTC midnight');
     const openMode = unrestrictedModels(config);
-    const groups = new Map<string, Group>([...config.quotas.premium.models.map((m): [string, Group] => [m, 'premium']), ...config.quotas.economy.models.map((m): [string, Group] => [m, 'economy'])]);
+    // Admission whitelist: Proxy scope ONLY. External production services
+    // never pass QuotaFuse admission, so their models must never be judged
+    // by this list.
+    const allowlist = new Map<string, Group>([...config.quotas.premium.models.map((m): [string, Group] => [m, 'premium']), ...config.quotas.economy.models.map((m): [string, Group] => [m, 'economy'])]);
     const fetchImpl = options.fetchImpl ?? fetch;
     let cursor: string | null = null;
     const visited = new Set<string>();
@@ -67,16 +71,6 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
         for (const row of bucket.results) {
           // Every row must be attributable to a known project scope.
           if (!row || typeof row.project_id !== 'string' || !row.project_id || typeof row.model !== 'string') throw new Error('Unattributable usage row detected');
-          // Mirror Proxy exactly: the whitelist is only an admission filter
-          // under official_v1; group accounting comes from the official ID map.
-          // Legacy configurations retain their original operator-supplied groups.
-          // Unknown models are NEVER assumed free-eligible: fail closed so an
-          // operator reviews model mapping before admission resumes.
-          const group = !openMode && !groups.has(row.model) ? undefined
-            : config.dataSharing.modelGroupAccounting === 'official_v1'
-              ? groupForUnrestrictedModel(row.model)
-              : openMode ? 'premium' : groups.get(row.model);
-          if (!group) throw new Error('Model outside the optional whitelist observed in org usage');
           if (!whole(row.input_tokens) || !whole(row.output_tokens)) throw new Error('Untrustworthy official token count');
           // Cross-page duplicate guard: the same (model, project) cell twice
           // in one collection cycle indicates overlapping pagination or a
@@ -86,21 +80,44 @@ export async function collectOnce(config: Config, ledger: Ledger, options: Colle
           seenRows.add(cell);
           const tokens = row.input_tokens + row.output_tokens;
           if (!Number.isSafeInteger(tokens)) throw new Error('Overflow in usage sum');
-          if (row.project_id === config.dataSharing.projectId) {
+          const isProxy = row.project_id === config.dataSharing.projectId;
+          let group: Group;
+          if (isProxy) {
+            // Proxy scope mirrors admission exactly. A whitelisted deployment
+            // that observes a non-whitelisted model inside its DEDICATED
+            // project proves foreign use of that project (or config drift):
+            // fail closed so dedication is re-verified before admission.
+            if (!openMode && !allowlist.has(row.model)) throw new Error('Proxy project used outside the admission whitelist');
+            group = !openMode && config.dataSharing.modelGroupAccounting !== 'official_v1'
+              ? allowlist.get(row.model)!
+              : openMode && config.dataSharing.modelGroupAccounting !== 'official_v1'
+                ? 'premium'
+                : groupForUnrestrictedModel(row.model);
             proxy[group] += tokens;
             if (!Number.isSafeInteger(proxy[group])) throw new Error('Overflow in usage sum');
           } else {
-            // External production traffic shares the same org pool. Record,
-            // do not reject: admission absorbs it via effective_used.
+            // External scope NEVER consults the admission whitelist: outside
+            // services choose their own models. Classification always uses
+            // the reviewed official group map. Models outside that map are
+            // conservatively counted in Premium (never ignored, never assumed
+            // free or paid-eligible) and recorded for operator review with
+            // explicit diagnostics. This pauses nothing by itself.
+            group = groupForUnrestrictedModel(row.model);
             external[group] += tokens;
             if (!Number.isSafeInteger(external[group])) throw new Error('Overflow in usage sum');
+            if (!isKnownModel(row.model)) {
+              const prev = unknownModels[row.model];
+              const sum = (prev?.tokens ?? 0) + tokens;
+              if (!Number.isSafeInteger(sum)) throw new Error('Overflow in usage sum');
+              unknownModels[row.model] = { group, tokens: sum };
+            }
           }
         }
       }
       if (!json.has_more) {
         if (!sawBucket) throw new Error('Missing official day bucket (cannot assume zero usage)');
-        ledger.publishSharedUsage(day, proxy, external, now);
-        return { proxy, external };
+        ledger.publishSharedUsage(day, proxy, external, now, unknownModels);
+        return { proxy, external, unknownModels };
       }
       if (typeof json.next_page !== 'string' || !json.next_page || visited.has(json.next_page)) throw new Error('Broken pagination');
       visited.add(json.next_page);

@@ -53,14 +53,33 @@ Releases with shared-pool accounting change the policy fingerprint (new
 `externalSafetyReserve`). An existing history-bearing ledger will report
 `POLICY_CHANGED` at boot — this is fail-closed working as designed, not a
 bug. Do not edit the fingerprint, delete the database, or clear
-`guard_control`:
+`guard_control`. Prefer the audited **in-place migration**, which keeps
+every reservation (including PENDING/UNKNOWN), every observation, every
+idempotency key and the pause state untouched:
 
-1. Pick a fresh UTC day with no PENDING/UNKNOWN/MANUAL_REVIEW rows and no current-day observations (00:00 UTC = 08:00 Asia/Taipei). Stop Proxy and Collector.
+1. Stop Proxy and Collector (both instance locks must be free).
 2. Back up `data/` (SQLite file plus WAL) and `config.json` to durable storage outside the repo.
-3. Add per-group `policy.externalSafetyReserve` bounds to `config.json` (peak external tokens/sec × visibility delay + 120s poll interval + margin).
-4. Point `server.storage` at a **new** SQLite file; keep the old file as the audit archive. Never delete it.
+3. Add per-group `policy.externalSafetyReserve` bounds to `config.json` (peak external tokens/sec × visibility delay + 120s poll interval + margin), and set `policy.proxyProjectDedicatedAttestedUntil` only after reviewing Dashboard project activity for exclusive QuotaFuse use.
+4. Run `npm run accounting:shared-migration -- operator-id 'evidence ticket (>=80 chars): reserve basis, dedication review, Usage/Costs check, backup location'`. It refuses unless the stored policy differs from the current config in exactly the reserve addition, and writes an `accounting_migration_audit` row.
 5. Start the Collector first, verify fresh proxy AND external baselines for both groups via `/quota` (`official_external_usage` must be a number, not null), check Dashboard Usage/Costs, then start the Proxy.
-6. Drain or rotate client idempotency keys across the cutover: the new ledger cannot see the old ledger's keys.
+
+Swapping in a fresh database file is a last resort, not the default: a new
+ledger loses idempotency history (a resent old key could dispatch twice),
+drops UNKNOWN/PENDING safety constraints (old unconfirmed requests could be
+re-admitted on top), and restarts baselines from zero. If it is unavoidable,
+drain all traffic, rotate client idempotency keys, independently review every
+old UNKNOWN/PENDING outcome first, and retain the old file as audit archive.
+
+## Proxy-project dedication review
+
+`PROXY_PROJECT_SHARED` (sticky) means proxy-scope official usage exceeded
+the dedicated-project upper bound: something besides QuotaFuse is using the
+routing project, or the baseline is broken. Do not clear it by polling:
+
+1. Keep services stopped. In the Dashboard, list all API activity for the routing project and identify the foreign key/service.
+2. Remove the foreign traffic (dedicated key rotation or move the other service to its own project).
+3. Confirm preflight `/responses/input_tokens` attribution if the overage is small and per-request shaped.
+4. Re-attest `proxyProjectDedicatedAttestedUntil` with a dated evidence ticket, back up, and restart the Collector for a fresh baseline. The sticky pause clears only via reviewed recovery, never automatically.
 
 ## Reviewed DISPATCHED UNKNOWN at UTC rollover
 

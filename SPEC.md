@@ -137,7 +137,8 @@ modelPolicy:
 
 - `admission_cap = floor(dailyTokens * safetyPct / 100)`（預設 premium 850K、economy 8.5M）。
 - `effective_used = official_external + max(official_proxy, verified_proxy_baseline + proxy_local_committed) + external_safety_reserve`；`remaining = max(0, admission_cap − effective_used)`；僅當 `new_request_reservation ≤ remaining` 且觀測新鮮可信才准入。
-- 組織額度由所有符合條件的服務共享；外部服務可合法繞過 Proxy，其消耗只會收緊准入，絕不觸發 collector 停止。`official_total + all_local_usage` 的無條件相加（重複扣除）與 `max(official_total, local_usage)`（漏算未反映的本地預留）皆禁止。
+- 組織額度由所有符合條件的服務共享；外部服務可合法繞過 Proxy，其消耗只會收緊准入，絕不觸發 collector 停止。外部 scope 分類只用官方群組映射，不看 Proxy 白名單；映射外的模型保守計入 Premium 並留診斷紀錄。
+- 路由專案本身必須專屬於 QuotaFuse（`proxyProjectDedicatedAttestedUntil` 到期見證＋運行時 tripwire）：`max()` 去重只有在此前提下成立，無證據不得放行；專案內出現本地上界解釋不了的官方用量即 sticky 鎖定待人工審查。
 - 即使官方 Usage API 落後，本地預留與未確定結果也不可釋放；官方觀測總量不得回退；失敗的輪詢不得視為零用量。
 - `admit` 必須在 SQLite `BEGIN IMMEDIATE` 單交易中完成餘額檢查 + 預留寫入；所有執行中的 Agent 共享同一個 SQLite DB。
 - 估算 `reserve = trusted_input_count + effective_max_output_tokens + account_margin`；`max_output_tokens`（Responses）或 `max_completion_tokens`（Chat）須由 Proxy 強制上限；禁止省略及無界輸出。
@@ -238,6 +239,7 @@ policy:
   mode: FREE_ONLY
   safetyPct: 85
   externalSafetyReserve: { premium: 50000, economy: 200000 }
+  proxyProjectDedicatedAttestedUntil: null # expiring manual attestation; null fails closed
   rejectHostedTools: true
   rejectUnknownModels: true
   rejectUnverifiedInputCounts: true
@@ -283,7 +285,7 @@ Model Allowlist 必須由部署程序顯式審核填入，不能在原始碼內�
 15. 資料分享資格撤銷、專案設定變動：停止所有免費路由。
 16. 沒有 Proxy Token、非本機來源、header spoofing、任意 upstream path：拒絕。
 17. OMP 收到本地 429/503：切到**獨立 Provider**，不在 OpenAI Data Sharing 群組內循環重試。
-18. 其他 Org 專案有旁路流量時：正確記錄為外部 scope 並收緊准入；collector 不得停止或報 invariant 錯誤。
+18. 其他 Org 專案有旁路流量時：正確記錄為外部 scope 並收緊准入；白名單外已知模型正確分組、未知模型保守計入 Premium 並留診斷；collector 不得停止或報 invariant 錯誤。路由專案內混入外部流量時：sticky 鎖定待審，不可低估放行。
 19. 透過測試帳務/人工 Dashboard 校對，確認免費標記與 Costs 沒有不預期項目；不能將 mock 成功誤當真實帳務保證。
 20. 進行故障注入測試：所有不確定狀態均有可追蹤的拒絕原因與恢復操作。
 
@@ -305,7 +307,7 @@ Model Allowlist 必須由部署程序顯式審核填入，不能在原始碼內�
 
 - Data Sharing enrollment 與實際優惠模型清單已驗證；每個群組上限正確。
 - API Token 估算在所有已允許請求形態上都有可信上界；不支援者會拒絕。
-- 無不受控且未設上界的同 Org 旁路流量（外部消耗需有 `externalSafetyReserve` 保守上界），或已明確停用 FREE_ONLY 生產保證。
+- 無不受控且未設上界的同 Org 旁路流量（外部消耗需有 `externalSafetyReserve` 保守上界），路由專案經見證專用，或已明確停用 FREE_ONLY 生產保證。
 - 20 項測試通過；實際 Dashboard/Costs 對帳完成；未知結果會留在 ledger 而非被釋放。
 - 沒有 admin/upstream secret 洩漏；任何限制失效會 Fail Closed。
 - 文件明示 **「最小化意外扣款風險」，不承諾由 Proxy 單方面保證 OpenAI 帳戶零費用**。

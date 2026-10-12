@@ -16,7 +16,7 @@ test('complete paginated usage aggregates groups then unpauses',async()=>{
   let calls=0;
   const fetchImpl=(async()=>new Response(JSON.stringify(pages[calls++]),{status:200})) as typeof fetch;
   try {const result=await collectOnce(c,l,{fetchImpl,adminKey:'fake-admin-test'});
-    assert.deepEqual(result,{proxy:{premium:200,economy:400},external:{premium:0,economy:0}});assert.equal(calls,2);assert.equal(l.isPaused(),false);
+    assert.deepEqual(result,{proxy:{premium:200,economy:400},external:{premium:0,economy:0},unknownModels:{}});assert.equal(calls,2);assert.equal(l.isPaused(),false);
   }finally{l.close();}
 });
 test('failed page closes admission and preserves old watermark',async()=>{
@@ -31,7 +31,9 @@ test('foreign-project usage is recorded as external scope, not a collector failu
   const l=new Ledger(':memory:'),c=cfg(),one=page([row(c.quotas.premium.models[0],100)]);one.data[0].results[0].project_id='another-project';
   const fetchImpl=(async()=>new Response(JSON.stringify(one))) as typeof fetch;
   try {const result=await collectOnce(c,l,{fetchImpl,adminKey:'fake'});
-    assert.deepEqual(result,{proxy:{premium:0,economy:0},external:{premium:200,economy:0}});
+    // The whitelisted-but-officially-unmapped test model is conservatively
+    // counted in premium external scope with explicit diagnostics.
+    assert.deepEqual(result,{proxy:{premium:0,economy:0},external:{premium:200,economy:0},unknownModels:{'gpt-test-2026-10-11':{group:'premium',tokens:200}}});
     assert.equal(l.isPaused(),false);
     assert.equal(l.observation(new Date().toISOString().slice(0,10),'premium')?.official_external,200);
   }finally{l.close();}
@@ -57,10 +59,13 @@ test('empty official usage page is not trusted as zero usage', async()=> {
   } finally {l.close();}
 });
 
-test('proxy usage above local ledger is accepted; collector keeps polling after transport failure',async()=>{
+test('proxy usage within committed bounds is accepted; collector keeps polling after transport failure',async()=>{
  const l=new Ledger(':memory:'),c=cfg();
  const day=new Date().toISOString().slice(0,10);
  l.publishSharedUsage(day,{premium:0,economy:0},{premium:0,economy:0});
+ l.admit(c,{key:'local',hash:'local',requestId:'local',model:c.quotas.premium.models[0],group:'premium',day,reserve:10});
+ l.complete('local',2);
+ // Official aggregate reflects the settled 2 (dedicated project, delayed).
  const fake=(async()=>new Response(JSON.stringify(page([row(c.quotas.premium.models[0],1)])))) as typeof fetch;
  try{
   const result=await collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'});
@@ -74,6 +79,28 @@ test('proxy usage above local ledger is accepted; collector keeps polling after 
   const retry=await collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'});
   assert.equal(retry.proxy.premium,2);
   assert.equal(l.isPaused(),false);
+ }finally{l.close();}
+});
+test('proxy official above local upper bound trips sticky project-sharing pause',async()=>{
+ const l=new Ledger(':memory:'),c=cfg();
+ const day=new Date().toISOString().slice(0,10);
+ l.publishSharedUsage(day,{premium:0,economy:0},{premium:0,economy:0});
+ // No local traffic, yet the dedicated project reports 200 tokens:
+ // foreign use of the proxy project (or a broken baseline). Sticky.
+ const fake=(async()=>new Response(JSON.stringify(page([row(c.quotas.premium.models[0],100)])))) as typeof fetch;
+ try{
+  await assert.rejects(()=>collectOnce(c,l,{fetchImpl:fake,adminKey:'test-admin'}),/dedicated/);
+  assert.equal(l.pauseReason(),'PROXY_PROJECT_SHARED');
+  assert.equal(l.observation(day,'premium')?.official_high_watermark,0);
+  // External-only growth never trips: same tokens from another project record cleanly.
+  const ext=page([row(c.quotas.premium.models[0],100)]);
+  ext.data[0].results[0].project_id='proj_external';
+  const l2=new Ledger(':memory:');
+  try {
+    const r=await collectOnce(c,l2,{fetchImpl:(async()=>new Response(JSON.stringify(ext))) as typeof fetch,adminKey:'test-admin'});
+    assert.equal(r.external.premium,200);
+    assert.equal(l2.isPaused(),false);
+  } finally { l2.close(); }
  }finally{l.close();}
 });
 test('collector cannot clear breached per-request usage bound',async()=>{
