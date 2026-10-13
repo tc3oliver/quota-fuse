@@ -105,9 +105,10 @@ must explicitly supply the `public` header as shown above.
 
 Local function declarations/arguments/results consume ordinary model tokens and
 go through the same allowlist, preflight, reservation and collector gates.
-**Status PROVISIONAL_PASS:** a 2026-10-12 live experiment verified incentive-tier
-placement for local function calls on the tested model (see [billing
-validation](billing-validation.md)); final Costs reconciliation is pending with
-operator-accepted residual risk. Use local agent functions normally — no extra
-user confirmation needed. Adapter admission is not proof of zero cost. Complete
+**Status CONFIRMED_COMPLIMENTARY (tested shapes):** a 2026-10-12 live experiment
+verified incentive-tier placement for local function calls on the tested model,
+and the closed-day Costs book confirmed US$0.00 with no tool-execution charges
+(see [billing validation](billing-validation.md)). Use local agent functions
+normally — no extra user confirmation needed. Adapter admission is not proof of
+zero cost. Complete
 [docs/billing-validation.md](billing-validation.md) before any live traffic.

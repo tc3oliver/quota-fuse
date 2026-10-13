@@ -116,12 +116,13 @@ every 120s, but official statistics may lag, so admission adds a configured
 conservative local admission estimate — never an official free-balance
 promise, and never a zero-fee guarantee under unbounded external traffic.
 
-**Local Function Calling is supported and operationally approved
-(PROVISIONAL_PASS)** based on 2026-10-12 live verification: function-call
+**Local Function Calling is supported and operationally approved**
+based on 2026-10-12 live verification: function-call
 generation and tool-loop continuation tokens on the tested model landed in the
-Data Sharing `incentivized-tier`; final Costs reconciliation is pending with
-operator-accepted residual risk. Agents use local functions (Bash, files, git)
-normally without re-confirming this risk. OpenAI-hosted tools stay blocked;
+Data Sharing `incentivized-tier`, and the closed-day Costs book confirmed
+US$0.00 with no tool-execution charges. Agents use local functions (Bash,
+files, git) normally without re-confirming this risk (tested shapes only).
+OpenAI-hosted tools stay blocked;
 see [billing validation](docs/billing-validation.md).
 
 QuotaFuse is an independent Apache-2.0 project, not affiliated with OpenAI.

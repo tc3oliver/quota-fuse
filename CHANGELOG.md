@@ -1,11 +1,10 @@
 ## Unreleased
 
-- Live billing experiment (PROVISIONAL_PASS): 2026-10-12 real-API local-function-calling
-  evidence on `gpt-4.1-mini-2025-04-14` — operational PASS, usage incentive-tier VERIFIED
-  for function-call generation and tool-loop continuation, preflight zero-usage, proxy loop
-  settles correctly, hosted tools still rejected. Final Costs reconciliation PENDING with
-  operator-accepted residual risk (tested local-function shapes only); status upgrades or
-  corrects when the Costs followup lands.
+- Live billing experiment (CONFIRMED_COMPLIMENTARY for tests A–E): 2026-10-12 real-API
+  local-function-calling evidence on `gpt-4.1-mini-2025-04-14` — operational PASS,
+  usage incentive-tier VERIFIED, and the closed-day Costs book confirmed US$0.00
+  (same-model input 12695 + output 144, no tool-execution charges). Hosted tools
+  still rejected. Scope: tested local-function shapes on tested model/project/date.
 - Unknown models counted bilaterally in ANY project: proxy-scope group-unconfirmed rows no longer fall back to premium-only (that undercounted Economy). They leave per-group sums untouched, land in `external_unknown_models` diagnostics, and bind both groups' estimates. Legacy operator-listed groupings unchanged; known models classified exactly once.
 - Eligibility expiry stays fail-closed with a 72h `ELIGIBILITY_ATTESTATION_EXPIRING` warning: no programmatic Data Sharing enrollment check exists (verified against the Admin/Usage API surface), so the date cannot auto-extend and unknown eligibility is never assumed free. Layered protection documented instead: one-time attestation, fingerprint-bound project/tier, continuous usage monitoring, Dashboard costs review.
 - Lifecycle carry: `crossDayCarry` counts only DISPATCHED-phase prior-day unresolved reservations (PENDING/UNKNOWN/MANUAL_REVIEW, reviewed-day exemption aside) with `admitted_at ≥ day-00:00Z − 155000ms`. PREFLIGHT-phase rows provably consumed zero and never carry; window-overlapping days keep the full reserve (timeout alone releases nothing); only the daily deduction expires on window proof, history/idempotency preserved.
